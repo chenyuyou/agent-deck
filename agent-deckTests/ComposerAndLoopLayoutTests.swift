@@ -4,25 +4,31 @@ import SwiftUI
 import XCTest
 @testable import agent_deck
 
-/// Drives the card's production DEBUG stress binding after its first appearance,
-/// matching the app journey's state transition instead of a static collapsed card.
+private final class PickerLifecycleDriver: ObservableObject {
+    @Published var expanded = false
+}
+
+/// Drives the production DEBUG stress binding using explicit test transitions.
 private struct PickerCardStressLifecycleFixture: View {
     var viewModel: AppViewModel
     let session: PiAgentSessionRecord
     let acknowledgements: PickerStressCardAcknowledgements
     let runsLifecycle: Bool
+    @ObservedObject var driver: PickerLifecycleDriver
     @State private var isExpanded: Bool
 
     init(
         viewModel: AppViewModel,
         session: PiAgentSessionRecord,
         acknowledgements: PickerStressCardAcknowledgements,
-        runsLifecycle: Bool
+        runsLifecycle: Bool,
+        driver: PickerLifecycleDriver
     ) {
         self.viewModel = viewModel
         self.session = session
         self.acknowledgements = acknowledgements
         self.runsLifecycle = runsLifecycle
+        self.driver = driver
         _isExpanded = State(initialValue: !runsLifecycle)
     }
 
@@ -33,19 +39,8 @@ private struct PickerCardStressLifecycleFixture: View {
             stressExpansionRequest: isExpanded,
             stressAcknowledgements: acknowledgements
         )
-        .onAppear {
-            guard runsLifecycle else { return }
-            // Leave the card collapsed long enough for its delayed layout snap,
-            // then re-expand for the production resize cycle.
-            DispatchQueue.main.async {
-                isExpanded = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                    isExpanded = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
-                        isExpanded = true
-                    }
-                }
-            }
+        .onChange(of: driver.expanded) { _, expanded in
+            if runsLifecycle { isExpanded = expanded }
         }
     }
 }
@@ -145,30 +140,33 @@ final class ComposerAndLoopLayoutTests: XCTestCase {
         let viewModel = AppViewModel()
         let session = try! PiTestSupport.makeParentSession()
         let acknowledgements = PickerStressCardAcknowledgements()
+        let driver = PickerLifecycleDriver()
         acknowledgements.reset(for: session.id)
         let host = NSHostingView(rootView: AnyView(realPickerCardSplitFixture(
             viewModel: viewModel,
             session: session,
             acknowledgements: acknowledgements,
+            driver: driver,
             runsLifecycle: true,
             width: 760
         )))
         let window = makeConstrainedWindow(host: host)
         Self.windows.append(window)
 
-        // Mount first so the fixture's lifecycle has started, then wait beyond
-        // the production collapse delay and verify a collapsed layout pass.
+        // Explicitly drive each transition; fixed timers can race first layout.
         assertFinite(resizeAndMeasure(window: window, host: host, width: 760, height: 820))
+        driver.expanded = true
+        XCTAssertTrue(runMainLoop(until: { acknowledgements.expanded }, timeout: 2))
+        driver.expanded = false
+        XCTAssertTrue(runMainLoop(until: { !acknowledgements.expanded }, timeout: 2))
         RunLoop.main.run(until: Date().addingTimeInterval(0.22))
         let collapsedGeometry = resizeAndMeasure(window: window, host: host, width: 760, height: 820)
         assertFinite(collapsedGeometry)
         XCTAssertTrue(acknowledgements.mounted)
         XCTAssertFalse(acknowledgements.expanded, "The card must complete its delayed collapsed layout before re-expanding.")
+        driver.expanded = true
         XCTAssertTrue(
-            // Allow the card's 0.12s delayed collapse snap plus the fixture's
-            // subsequent 0.36s re-expansion request to be delivered through
-            // the hosted AppKit display cycle under parallel suite load.
-            runMainLoop(until: { acknowledgements.expanded }, timeout: 0.6),
+            runMainLoop(until: { acknowledgements.expanded }, timeout: 2),
             "The card must re-expand before the resize cycle begins."
         )
 
@@ -180,6 +178,7 @@ final class ComposerAndLoopLayoutTests: XCTestCase {
                 viewModel: viewModel,
                 session: session,
                 acknowledgements: acknowledgements,
+                driver: driver,
                 runsLifecycle: false,
                 width: width
             ))
@@ -198,6 +197,7 @@ final class ComposerAndLoopLayoutTests: XCTestCase {
                 viewModel: viewModel,
                 session: session,
                 acknowledgements: acknowledgements,
+                driver: driver,
                 runsLifecycle: false,
                 width: width
             ))
@@ -270,6 +270,7 @@ final class ComposerAndLoopLayoutTests: XCTestCase {
         viewModel: AppViewModel,
         session: PiAgentSessionRecord,
         acknowledgements: PickerStressCardAcknowledgements,
+        driver: PickerLifecycleDriver,
         runsLifecycle: Bool,
         width: CGFloat
     ) -> some View {
@@ -282,7 +283,8 @@ final class ComposerAndLoopLayoutTests: XCTestCase {
                     viewModel: viewModel,
                     session: session,
                     acknowledgements: acknowledgements,
-                    runsLifecycle: runsLifecycle
+                    runsLifecycle: runsLifecycle,
+                    driver: driver
                 )
                 Divider()
                 Text("Composer")

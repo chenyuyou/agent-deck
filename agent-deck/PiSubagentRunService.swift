@@ -37,10 +37,15 @@ final class PiSubagentRunService {
     /// only from these messages and displayed only after they reconcile with the
     /// child's `get_session_stats` total cost.
     private var piMessagesByRunID: [UUID: [JSONValue]] = [:]
-    /// On `agent_end` we request the child's session stats (for its cost) and
-    /// hold off completion until the response lands or this timeout fires, so a
-    /// model that never reports stats can't stall the run.
+    /// Wait for both completion snapshots, which may arrive in either order.
     private var pendingStatsTasksByRunID: [UUID: Task<Void, Never>] = [:]
+    private struct CompletionResponses {
+        let messagesID: String
+        let statsID: String
+        var receivedMessages = false
+        var receivedStats = false
+    }
+    private var completionResponsesByRunID: [UUID: CompletionResponses] = [:]
     private let fileManager = FileManager.default
     var childMemoryArgumentsProvider: ((PiAgentSessionRecord, EffectiveAgentRecord, String) async throws -> PiSubagentMemoryLaunchContext)?
     var onMemoryWrite: ((UUID, UUID, String?, AgentMemoryWriteBridgeRequest) async -> String)?
@@ -513,7 +518,9 @@ final class PiSubagentRunService {
         }
         switch event.type {
         case "response":
-            if event.command == "get_state", let data = event.data {
+            if event.command == "prompt", event.success == true, event.data?["disposition"]?.stringValue == "handled" {
+                requestStatsThenComplete(runID: runID, parentSessionID: parentSessionID)
+            } else if event.command == "get_state", let data = event.data {
                 store.updateSubagentRun(runID, parentSessionID: parentSessionID) { run in
                     run.childPiSessionFile = data["sessionFile"]?.stringValue ?? run.childPiSessionFile
                     if let resolvedModel = resolvedModelName(from: data) {
@@ -533,13 +540,10 @@ final class PiSubagentRunService {
                     ?? []
                 piMessagesByRunID[runID] = messages
                 applyVerifiedCostBreakdownIfPossible(runID: runID, parentSessionID: parentSessionID, messages: messages)
+                acceptCompletionResponse(event, runID: runID, parentSessionID: parentSessionID)
             } else if event.command == "get_session_stats", let data = event.data {
                 applySubagentStats(data, runID: runID, parentSessionID: parentSessionID)
-                // Stats arrived — cancel the timeout and complete now.
-                if pendingStatsTasksByRunID[runID] != nil {
-                    pendingStatsTasksByRunID.removeValue(forKey: runID)?.cancel()
-                    completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
-                }
+                acceptCompletionResponse(event, runID: runID, parentSessionID: parentSessionID)
             }
         case "tool_execution_start", "tool_execution_update", "tool_execution_end":
             let toolName = event.toolName ?? "tool"
@@ -569,6 +573,10 @@ final class PiSubagentRunService {
         case "extension_ui_request":
             handleExtensionUIRequest(event, rawLine: rawLine, runID: runID, parentSessionID: parentSessionID)
         case "agent_end":
+            if clientsByRunID[runID]?.supportsSettledEvent != true {
+                requestStatsThenComplete(runID: runID, parentSessionID: parentSessionID)
+            }
+        case "agent_settled":
             requestStatsThenComplete(runID: runID, parentSessionID: parentSessionID)
         case "turn_end":
             break
@@ -660,6 +668,7 @@ final class PiSubagentRunService {
     private func clearStreamingState(for runID: UUID) {
         streamFlushTasksByRunID.removeValue(forKey: runID)?.cancel()
         pendingStatsTasksByRunID.removeValue(forKey: runID)?.cancel()
+        completionResponsesByRunID.removeValue(forKey: runID)
         piMessagesByRunID[runID] = nil
         assistantEntryIDsByRunID[runID] = nil
         assistantTextByRunID[runID] = nil
@@ -809,8 +818,7 @@ final class PiSubagentRunService {
         }
     }
 
-    /// On `agent_end`, ask the child's still-live Pi session for its stats (the
-    /// only source of its cost) and defer completion until the response lands or
+    /// At the final run boundary, request messages and stats and defer completion until both arrive or
     /// a short timeout fires. Completion otherwise still happens via process
     /// termination, so this never adds latency in the common one-shot case.
     private func requestStatsThenComplete(runID: UUID, parentSessionID: UUID) {
@@ -822,17 +830,33 @@ final class PiSubagentRunService {
             completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
             return
         }
-        client.getMessages()
-        client.getSessionStats()
+        let messagesID = client.getMessages()
+        let statsID = client.getSessionStats()
+        completionResponsesByRunID[runID] = CompletionResponses(messagesID: messagesID, statsID: statsID)
         pendingStatsTasksByRunID[runID] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 guard let self else { return }
                 guard self.pendingStatsTasksByRunID.removeValue(forKey: runID) != nil else { return }
+                self.completionResponsesByRunID.removeValue(forKey: runID)
                 self.completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
             }
         }
+    }
+
+    private func acceptCompletionResponse(_ event: PiAgentRPCEvent, runID: UUID, parentSessionID: UUID) {
+        guard var pending = completionResponsesByRunID[runID] else { return }
+        if event.command == "get_messages", event.id == nil || event.id == pending.messagesID {
+            pending.receivedMessages = true
+        } else if event.command == "get_session_stats", event.id == nil || event.id == pending.statsID {
+            pending.receivedStats = true
+        }
+        completionResponsesByRunID[runID] = pending
+        guard pending.receivedMessages && pending.receivedStats else { return }
+        completionResponsesByRunID.removeValue(forKey: runID)
+        pendingStatsTasksByRunID.removeValue(forKey: runID)?.cancel()
+        completeIfNeeded(runID: runID, parentSessionID: parentSessionID)
     }
 
     /// Parses a child `get_session_stats` response onto `run.child`, mirroring the

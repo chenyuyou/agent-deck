@@ -14,8 +14,8 @@ final class PiRPCClient: @unchecked Sendable {
 
     private let process: PiAgentProcess
     private let encoder = JSONEncoder()
-    private var requestCounter = 0
-    private let lock = NSLock()
+    private let responses = PiRPCResponseTracker()
+    let supportsSettledEvent: Bool
 
     var launchCommand: String { process.launchCommand }
     var isRunning: Bool { process.isRunning }
@@ -33,6 +33,8 @@ final class PiRPCClient: @unchecked Sendable {
         onStderr: @escaping StderrHandler,
         onTermination: @escaping TerminationHandler
     ) throws {
+        let tracker = responses
+        supportsSettledEvent = PiExecutableResolver().resolve().map { PiExecutableResolver.supportsSettledEvent(piPath: $0.path) } ?? false
         let args = Self.launchArguments(
             sessionFile: sessionFile,
             provider: provider,
@@ -45,12 +47,13 @@ final class PiRPCClient: @unchecked Sendable {
         process = try PiAgentProcess(
             configuration: .init(arguments: args, currentDirectoryURL: cwd, environment: environment),
             onStdoutLines: { lines in
-                let events = lines.map { line in
+                let events = lines.compactMap { line -> EventLine? in
                     let data = Data(line.utf8)
                     let event = try? JSONDecoder().decode(PiAgentRPCEvent.self, from: data)
+                    if let event, !tracker.shouldDeliver(event) { return nil }
                     return EventLine(rawLine: line, event: event)
                 }
-                onEvent(events)
+                if !events.isEmpty { onEvent(events) }
             },
             onStderrLines: onStderr,
             onTermination: onTermination
@@ -85,8 +88,8 @@ final class PiRPCClient: @unchecked Sendable {
     }
 
     func getState() { send(type: "get_state") }
-    func getMessages() { send(type: "get_messages") }
-    func getSessionStats() { send(type: "get_session_stats") }
+    @discardableResult func getMessages() -> String { send(type: "get_messages") }
+    @discardableResult func getSessionStats() -> String { send(type: "get_session_stats") }
     func getCommands() { send(type: "get_commands") }
     func abort() { send(type: "abort") }
     func setSessionName(_ name: String) { send(type: "set_session_name", fields: ["name": name]) }
@@ -123,16 +126,14 @@ final class PiRPCClient: @unchecked Sendable {
         send(type: type, fields: fields)
     }
 
-    func send(type: String, fields: [String: Any] = [:]) {
-        lock.lock()
-        requestCounter += 1
-        let requestID = "pm-\(requestCounter)"
-        lock.unlock()
+    @discardableResult func send(type: String, fields: [String: Any] = [:]) -> String {
+        let requestID = responses.register(type: type)
 
         var command = fields
         command["id"] = requestID
         command["type"] = type
         write(command)
+        return requestID
     }
 
     private func sendExtensionUIResponse(_ fields: [String: Any]) {
@@ -164,5 +165,39 @@ final class PiRPCClient: @unchecked Sendable {
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) { [process] in
             process.terminate()
         }
+    }
+}
+
+/// Responses can arrive out of order. Discard superseded snapshots and model or
+/// thinking selections; legacy responses without IDs remain supported.
+nonisolated final class PiRPCResponseTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counter = 0
+    private var lastDelivered: [String: Int] = [:]
+    private func group(for type: String) -> String? {
+        switch type {
+        case "get_state", "get_messages", "get_session_stats", "get_commands": return type
+        case "set_model", "cycle_model": return "model_selection"
+        case "set_thinking_level", "cycle_thinking_level": return "thinking_selection"
+        default: return nil
+        }
+    }
+
+    func register(type: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        counter += 1
+        if group(for: type) == "model_selection" || group(for: type) == "thinking_selection" {
+            lastDelivered["get_state"] = counter
+        }
+        return "pm-\(counter)"
+    }
+
+    func shouldDeliver(_ event: PiAgentRPCEvent) -> Bool {
+        guard event.type == "response", let command = event.command, let group = group(for: command),
+              let id = event.id, id.hasPrefix("pm-"), let number = Int(id.dropFirst(3)) else { return true }
+        lock.lock(); defer { lock.unlock() }
+        guard number >= (lastDelivered[group] ?? 0) else { return false }
+        lastDelivered[group] = number
+        return true
     }
 }

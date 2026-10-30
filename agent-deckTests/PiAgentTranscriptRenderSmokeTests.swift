@@ -228,6 +228,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFrontRegardless()
         defer { window.close() }
@@ -256,6 +257,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFrontRegardless()
         defer { window.close() }
@@ -282,6 +284,7 @@ final class PiAgentTranscriptRenderSmokeTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderFrontRegardless()
         defer { window.close() }

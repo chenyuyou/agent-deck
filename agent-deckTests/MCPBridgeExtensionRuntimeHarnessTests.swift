@@ -6,11 +6,15 @@ import XCTest
 final class MCPBridgeExtensionRuntimeHarnessTests: XCTestCase {
     @MainActor
     func testGeneratedExtensionPreservesMixedContentAndMarksOnlyCorrelatedErrors() throws {
-        let node = "/Users/andrea/.hermes/node/bin/node"
-        let jiti = "/Users/andrea/.hermes/hermes-agent/node_modules/jiti"
-        guard FileManager.default.isExecutableFile(atPath: node), FileManager.default.fileExists(atPath: jiti) else {
+        let resolver = PiExecutableResolver()
+        guard let node = resolver.resolveNode()?.path,
+              let piPath = resolver.resolve()?.path,
+              let package = PiExecutableResolver.managedPackageRoot(piPath: piPath) else {
             throw XCTSkip("Installed Pi runtime jiti loader is unavailable.")
         }
+        let modules = package.deletingLastPathComponent().deletingLastPathComponent()
+        let jiti = modules.appendingPathComponent("jiti").path
+        guard FileManager.default.fileExists(atPath: jiti) else { throw XCTSkip("Installed Pi runtime jiti loader is unavailable.") }
 
         let source = try PiNativeSubagentBridgeExtensions.mcpExtensionURL()
         let script = #"""
@@ -46,7 +50,7 @@ final class MCPBridgeExtensionRuntimeHarnessTests: XCTestCase {
         console.log(JSON.stringify({ success, errorA, errorB, fallback, finalizedA, finalizedB, mismatched }));
         })().catch(error => { console.error(error); process.exit(1); });
         """#
-        let output = try run(executable: node, arguments: ["-e", script, jiti, source.path])
+        let output = try run(executable: node, arguments: ["-e", script, jiti, source.path], modulePath: modules.path)
         let result = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any]
         let success = try XCTUnwrap(result?["success"] as? [String: Any])
         XCTAssertEqual((success["content"] as? [[String: Any]])?.map { $0["type"] as? String }, ["text", "image", "text"])
@@ -65,14 +69,14 @@ final class MCPBridgeExtensionRuntimeHarnessTests: XCTestCase {
         XCTAssertEqual(((fallback["content"] as? [[String: Any]])?.first?["text"] as? String), "legacy bridge text")
     }
 
-    private func run(executable: String, arguments: [String]) throws -> String {
+    private func run(executable: String, arguments: [String], modulePath: String) throws -> String {
         let process = Process()
         let output = Pipe()
         let error = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         process.environment = ProcessInfo.processInfo.environment.merging([
-            "NODE_PATH": "/Users/andrea/.hermes/node/lib/node_modules"
+            "NODE_PATH": modulePath
         ], uniquingKeysWith: { _, new in new })
         process.standardOutput = output
         process.standardError = error

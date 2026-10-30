@@ -66,20 +66,22 @@ final class PiExecutableResolverTests: XCTestCase {
     }
 
     func testExecutableResolutionFromEnvVarWithTildeExpansion() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        setenv("AGENT_DECK_PI_PATH", "\(home)/.local/bin/pi", 1)
+        let directoryName = "agent-deck-pi-tilde-\(UUID().uuidString)"
+        let homeDepth = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.pathComponents.count - 1
+        let toRoot = String(repeating: "/..", count: homeDepth)
+        setenv("AGENT_DECK_PI_PATH", "~\(toRoot)/private/tmp/\(directoryName)/pi", 1)
         defer { unsetenv("AGENT_DECK_PI_PATH") }
 
-        let tempPi = URL(fileURLWithPath: "\(home)/.local/bin/pi")
+        let tempPi = URL(fileURLWithPath: "/private/tmp/\(directoryName)/pi")
         let parentDir = tempPi.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
         try? "#!/bin/sh\necho test".write(to: tempPi, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tempPi.path)
-        defer { try? FileManager.default.removeItem(at: tempPi) }
+        defer { try? FileManager.default.removeItem(at: parentDir) }
 
         let resolver = PiExecutableResolver()
         let resolved = resolver.resolve()
-        XCTAssertNotNil(resolved)
+        XCTAssertEqual(resolved?.standardizedFileURL, tempPi.standardizedFileURL)
     }
 
     func testResolveReturnsNilWhenPiNotFound() {

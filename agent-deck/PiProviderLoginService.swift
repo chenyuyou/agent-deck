@@ -76,6 +76,7 @@ final class PiProviderLoginService {
             currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser,
             environment: [
                 "AGENT_DECK_PI_PATH": piPath,
+                "AGENT_DECK_PI_PACKAGE_PATH": PiExecutableResolver.managedPackageRoot(piPath: piPath)?.path ?? "",
                 "AGENT_DECK_AUTH_PROVIDER": providerID,
                 "AGENT_DECK_AUTH_TYPE": authType,
                 "AGENT_DECK_AUTH_ACTION": action
@@ -223,6 +224,7 @@ final class PiProviderLoginService {
 
     function findIndex() {
       const candidates = [];
+      if (process.env.AGENT_DECK_PI_PACKAGE_PATH) candidates.push(resolve(process.env.AGENT_DECK_PI_PACKAGE_PATH, 'dist/index.js'));
       const piPath = process.env.AGENT_DECK_PI_PATH;
       if (piPath && existsSync(piPath)) {
         try {

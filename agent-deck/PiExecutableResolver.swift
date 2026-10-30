@@ -118,12 +118,14 @@ struct PiExecutableResolver: Sendable {
             return pathResolved
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dataRoot = environment["XDG_DATA_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "\(home)/.local/share"
         var candidates = [
             "/opt/homebrew/bin/node",
             "/usr/local/bin/node",
             "/usr/bin/node",
             "\(home)/.volta/bin/node",
             "\(home)/.hermes/node/bin/node",
+            "\(dataRoot)/pi-node/current/bin/node",
             "\(home)/.local/bin/node",
             "\(home)/.nvm/versions/node/current/bin/node"
         ]
@@ -134,6 +136,47 @@ struct PiExecutableResolver: Sendable {
         return candidates
             .map(URL.init(fileURLWithPath:))
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
+    /// The pi.dev launcher is a shell script, not a symlink to the installed
+    /// package. Its managed install marker identifies the active release.
+    nonisolated static func managedPackageRoot(piPath: String) -> URL? {
+        let launcher = URL(fileURLWithPath: piPath).standardizedFileURL.resolvingSymlinksInPath()
+        guard launcher.lastPathComponent == "pi", launcher.deletingLastPathComponent().lastPathComponent == "bin" else { return nil }
+        let agent = launcher.deletingLastPathComponent().deletingLastPathComponent()
+        let install = agent.appendingPathComponent("install", isDirectory: true)
+        guard let raw = try? String(contentsOf: install.appendingPathComponent("current-version"), encoding: .utf8) else { return nil }
+        let version = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-")
+        guard !version.isEmpty, version != ".", version != "..", version.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+        let root = install.appendingPathComponent("releases", isDirectory: true).appendingPathComponent(version, isDirectory: true)
+            .appendingPathComponent("node_modules/@earendil-works/pi-coding-agent", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent("dist/index.js").path) else { return nil }
+        return root
+    }
+
+    nonisolated static func supportsSettledEvent(piPath: String) -> Bool {
+        var candidates: [URL] = []
+        if let managed = managedPackageRoot(piPath: piPath) { candidates.append(managed) }
+        var directory = URL(fileURLWithPath: piPath).standardizedFileURL.resolvingSymlinksInPath().deletingLastPathComponent()
+        for _ in 0..<10 {
+            candidates.append(directory)
+            candidates.append(directory.appendingPathComponent("node_modules/@earendil-works/pi-coding-agent"))
+            candidates.append(directory.appendingPathComponent("node_modules/@mariozechner/pi-coding-agent"))
+            let parent = directory.deletingLastPathComponent()
+            if parent == directory { break }
+            directory = parent
+        }
+        for candidate in candidates {
+            guard let data = try? Data(contentsOf: candidate.appendingPathComponent("package.json")),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let name = json["name"] as? String, name == "@earendil-works/pi-coding-agent" || name == "@mariozechner/pi-coding-agent",
+                  let version = json["version"] as? String else { continue }
+            let numbers = version.split(separator: ".").prefix(3).compactMap { Int($0) }
+            guard numbers.count == 3 else { return false }
+            return numbers.lexicographicallyPrecedes([0, 80, 4]) == false
+        }
+        return false
     }
 
     nonisolated static func commonPiCandidates() -> [URL] {

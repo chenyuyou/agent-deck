@@ -121,6 +121,63 @@ final class PiSubagentLaunchPlannerTests: XCTestCase {
 
 @MainActor
 final class PiSubagentRunServiceSmokeTests: XCTestCase {
+    func testChildWaitsForMessagesWhenStatsArriveFirst() async throws {
+        let directory = try PiTestSupport.temporaryProjectURL()
+        let executable = directory.appendingPathComponent("pi")
+        try #"{"name":"@earendil-works/pi-coding-agent","version":"1.4.0"}"#.write(to: directory.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        let script = """
+        #!/bin/sh
+        sleep 0.3
+        printf '%s\\n' '{"type":"agent_start"}' '{"type":"agent_end"}' '{"type":"agent_settled"}'
+        sleep 0.2
+        printf '%s\\n' '{"type":"response","command":"get_session_stats","success":true,"data":{}}'
+        sleep 0.7
+        printf '%s\\n' '{"type":"response","command":"get_messages","success":true,"data":{"messages":[]}}'
+        cat >/dev/null
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let previous = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
+        defer { restorePiPath(previous) }
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiSubagentRunService(store: store)
+        let parent = try PiTestSupport.makeParentSession(projectURL: directory)
+        let run = try await runner.runSingle(parentSession: parent, agent: PiTestSupport.makeAgent(), snapshot: .empty, task: "Test response order")
+        defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertTrue(store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })?.status.isActive == true)
+        let completed = await PiTestSupport.waitUntilAsync(timeout: 3) { store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })?.status == .completed }
+        XCTAssertTrue(completed)
+    }
+
+    func testModernChildWaitsForAgentSettled() async throws {
+        let directory = try PiTestSupport.temporaryProjectURL()
+        let executable = directory.appendingPathComponent("pi")
+        try #"{"name":"@earendil-works/pi-coding-agent","version":"1.4.0"}"#.write(to: directory.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        let script = """
+        #!/bin/sh
+        sleep 0.3
+        printf '%s\\n' '{"type":"agent_start"}' '{"type":"agent_end"}'
+        sleep 2
+        printf '%s\\n' '{"type":"agent_settled"}'
+        cat >/dev/null
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let previous = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
+        defer { restorePiPath(previous) }
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiSubagentRunService(store: store)
+        let parent = try PiTestSupport.makeParentSession(projectURL: directory)
+        let run = try await runner.runSingle(parentSession: parent, agent: PiTestSupport.makeAgent(), snapshot: .empty, task: "Test settled event")
+        defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
+        try await Task.sleep(for: .milliseconds(1500))
+        XCTAssertTrue(store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })?.status.isActive == true)
+        let completed = await PiTestSupport.waitUntilAsync(timeout: 5) { store.subagentRuns(for: parent.id).first(where: { $0.id == run.id })?.status == .completed }
+        XCTAssertTrue(completed)
+    }
     func testRunSingleDoesNotInjectProjectEnvIntoChildPiProcess() async throws {
         let harness = try PiTestSupport.makeEnvCaptureHarness(keys: [
             "AGENT_DECK_ENV_CHILD_SMOKE",
@@ -410,7 +467,7 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         XCTAssertTrue(command.contains("--no-extensions"))
         XCTAssertTrue(command.contains("--extension"))
         XCTAssertTrue(command.contains("contact-supervisor-bridge.ts"))
-        XCTAssertTrue(command.contains("agent-deck-web-access.ts"))
+        XCTAssertEqual(command.contains("agent-deck-web-access.ts"), PiNativeSubagentBridgeExtensions.isExaConfigured(environment: EnvRuntimeEnvironment().environment()))
         XCTAssertTrue(command.contains("agent-deck-openai-fast.ts"))
         XCTAssertTrue(command.contains("system-prompt-audit-bridge.ts"))
         XCTAssertTrue(command.contains(customExtension))
@@ -782,14 +839,8 @@ final class PiSubagentRunServiceSmokeTests: XCTestCase {
         )
         defer { runner.stop(runID: run.id, parentSessionID: parent.id) }
 
-        let routed = PiTestSupport.waitUntil {
+        let routed = await PiTestSupport.waitUntilAsync {
             responseValue(id: "mcp-child-1", in: harness.stdinLog) == "mcp routed: call Pidgeon/list_stories"
-        }
-        // The child-process round-trip needs the fake Pi child to run and emit, which
-        // some sandboxes can't do (the sibling `testChildRuntimeSystemPromptAuditWrites…`
-        // has the same constraint). Skip rather than false-fail there; it runs in CI.
-        if !routed {
-            throw XCTSkip("Child-process bridge round-trip not exercisable in this environment; the dispatch wiring is validated in CI.")
         }
         XCTAssertTrue(routed, "the child mcp bridge call should round-trip through onMCPBridgeRequest")
     }

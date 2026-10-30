@@ -24,6 +24,8 @@ The Doctor detects how the resolved Pi executable was installed and always shows
 
 Only a release available through the detected source is actionable. Homebrew's formula API supplies the Homebrew version, while Bun, npm, pnpm, and Yarn use the package version published in the npm registry. If an official Pi release is newer than the detected source, the Doctor shows both versions and a waiting state, but does not offer or automatically run an update that cannot deliver it. Updates preserve the installation method: a Homebrew-owned Pi runs `brew upgrade pi-coding-agent`; other existing installations, including pi.dev curl installs, run `pi update pi`, whose updater preserves supported global package managers including Bun.
 
+For Pi's managed installer, provider and model discovery resolve the active release through the installer's current-version marker. With Pi 0.80.4 and later, Agent Deck waits for the RPC `agent_settled` event before marking a run complete; older or unidentifiable installations retain the legacy completion behavior.
+
 For a missing Pi, Agent Deck installs only through pi.dev's official package-manager methods: npm, then pnpm, then Bun. If none is available, it opens Pi's official curl installer in Terminal. It never installs Pi through Homebrew, but continues to recognize and update existing Homebrew and Yarn installations.
 
 Agent Deck searches Bun's default `~/.bun/bin/pi` path as well as `BUN_INSTALL/bin/pi` and the configurable `BUN_INSTALL_BIN` location. It also searches `PNPM_HOME` plus macOS pnpm homes (`~/Library/pnpm`, `~/Library/Application Support/pnpm`, and `~/.local/share/pnpm`), common npm prefixes (including `~/.local` and `~/.hermes/node`), the process `PATH`, and explicit Agent Deck Pi path overrides.

@@ -163,7 +163,7 @@ final class PiAgentRunnerService {
     private var streamFlushTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     private var pendingIdleTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Sessions for which Pi has emitted `agent_start` (or at least `turn_start`) but
-    /// not the authoritative `agent_end`. `isStreaming` can be false between turns,
+    /// not the authoritative settled event on supported Pi versions. `isStreaming` can be false between turns,
     /// after tool use, compaction, or retries, so it is not by itself a turn-finished signal.
     private var activeAgentRunSessionIDs: Set<UUID> = []
     private var idleParkingTasksBySessionID: [UUID: Task<Void, Never>] = [:]
@@ -1439,7 +1439,8 @@ final class PiAgentRunnerService {
                 store.setProcessingActivity(.preparing, for: sessionID)
             }
         case "agent_end", "turn_end":
-            if event.type == "agent_end" {
+            let waitsForSettled = clientsBySessionID[sessionID]?.supportsSettledEvent == true
+            if event.type == "agent_end" && !waitsForSettled {
                 activeAgentRunSessionIDs.remove(sessionID)
             }
             // Some Pi RPC streams include the final assistant message on turn_end/agent_end
@@ -1448,10 +1449,16 @@ final class PiAgentRunnerService {
             if let message = finalAssistantMessage(from: event) {
                 finalizeCompletedMessage(message, rawLine: rawLine, sessionID: sessionID)
             }
-            if event.type == "agent_end" {
+            if event.type == "agent_end" && !waitsForSettled {
                 scheduleIdleConfirmation(sessionID: sessionID)
                 clientsBySessionID[sessionID]?.getMessages()
             }
+            clientsBySessionID[sessionID]?.getState()
+            clientsBySessionID[sessionID]?.getSessionStats()
+        case "agent_settled":
+            activeAgentRunSessionIDs.remove(sessionID)
+            scheduleIdleConfirmation(sessionID: sessionID)
+            clientsBySessionID[sessionID]?.getMessages()
             clientsBySessionID[sessionID]?.getState()
             clientsBySessionID[sessionID]?.getSessionStats()
         case "message_update":
@@ -1499,6 +1506,13 @@ final class PiAgentRunnerService {
             let message = event.error?.compactDescription ?? event.data?.compactDescription ?? rawLine
             mark(sessionID, status: .failed, error: message)
             store.append(.init(sessionID: sessionID, role: .error, title: event.command ?? "RPC Error", text: message, rawJSON: rawLine))
+            return
+        }
+
+        if event.command == "prompt", event.data?["disposition"]?.stringValue == "handled" {
+            if !activeAgentRunSessionIDs.contains(sessionID) {
+                scheduleIdleConfirmation(sessionID: sessionID)
+            }
             return
         }
 
@@ -2028,7 +2042,7 @@ final class PiAgentRunnerService {
             }
             // `message_end` only completes one message. Pi may still continue the same
             // run with tools, compaction, retries, follow-ups, or another turn. Wait for
-            // `agent_end` (or a non-active get_state outside an agent run) before idling.
+            // `agent_settled` on supported Pi versions (or the legacy boundary) before idling.
         } else if role == "user" {
             // Pi echoes user messages back over RPC. The app already records the submitted prompt.
             return
@@ -2037,7 +2051,7 @@ final class PiAgentRunnerService {
                 store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
             }
             // A tool result ends only the tool message; the agent may still perform a
-            // follow-up model turn. `agent_end` is the authoritative completion signal.
+            // follow-up model turn. Wait for the applicable run completion boundary.
         } else if !text.isEmpty {
             store.append(.init(sessionID: sessionID, role: .raw, title: role, text: text, rawJSON: rawLine))
         }

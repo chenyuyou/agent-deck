@@ -62,6 +62,7 @@ struct PiProviderCatalogService: Sendable {
 
         function packageIndexCandidates() {
           const candidates = [];
+          if (process.env.AGENT_DECK_PI_PACKAGE_PATH) candidates.push(resolve(process.env.AGENT_DECK_PI_PACKAGE_PATH, 'dist/index.js'));
           const piPath = process.env.AGENT_DECK_PI_PATH;
           if (piPath && existsSync(piPath)) {
             try {
@@ -107,11 +108,11 @@ struct PiProviderCatalogService: Sendable {
 
         do {
             let result = try await commandRunner.run(
-                "node",
+                piResolver.resolveNode()?.path ?? "node",
                 arguments: ["--input-type=module", "--eval", script],
                 currentDirectoryURL: nil,
                 timeout: 8,
-                environment: ["AGENT_DECK_PI_PATH": piPath]
+                environment: ["AGENT_DECK_PI_PATH": piPath, "AGENT_DECK_PI_PACKAGE_PATH": PiExecutableResolver.managedPackageRoot(piPath: piPath)?.path ?? ""]
             )
             guard result.exitCode == 0,
                   let data = result.stdout.data(using: .utf8),

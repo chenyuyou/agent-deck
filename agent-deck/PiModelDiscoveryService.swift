@@ -52,6 +52,7 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 
 const candidates = [];
+if (process.env.AGENT_DECK_PI_PACKAGE_PATH) candidates.push(resolve(process.env.AGENT_DECK_PI_PACKAGE_PATH, 'dist/core/model-registry.js'));
 
 const piPath = process.env.AGENT_DECK_PI_PATH;
 if (piPath && existsSync(piPath)) {
@@ -82,14 +83,19 @@ if (!modulePath) throw new Error('Could not locate pi-coding-agent model-registr
 
 const registryModule = await import(modulePath);
 const ModelRegistry = registryModule.ModelRegistry;
-// AuthStorage lives alongside ModelRegistry; load it so the registry can resolve auth-gated
-// providers, then point it at the real ~/.pi/agent/models.json.
-const authModule = await import(resolve(dirname(modulePath), 'auth-storage.js'));
-const AuthStorage = authModule.AuthStorage;
-const auth = AuthStorage.create();
-const modelsJsonPath = join(homedir(), '.pi/agent/models.json');
-const registry = ModelRegistry.create(auth, modelsJsonPath);
-const allModels = (typeof registry.getAll === 'function') ? registry.getAll() : [];
+const distRoot = dirname(dirname(modulePath));
+const publicAPI = await import(resolve(distRoot, 'index.js'));
+let allModels;
+if (typeof publicAPI.ModelRuntime?.create === 'function') {
+  const runtime = await publicAPI.ModelRuntime.create({ allowModelNetwork: false });
+  allModels = [...runtime.getModels()];
+} else {
+  // Older Pi releases expose the synchronous ModelRegistry factory instead.
+  const authModule = await import(resolve(dirname(modulePath), 'auth-storage.js'));
+  const auth = authModule.AuthStorage.create();
+  const registry = ModelRegistry.create(auth, join(homedir(), '.pi/agent/models.json'));
+  allModels = registry.getAll();
+}
 const byKey = new Map(allModels.map((m) => [`${m.provider}/${m.id}`, m]));
 
 // pi-ai's getSupportedThinkingLevels consumes a model object (built-in or custom) read from
@@ -102,7 +108,17 @@ const pkgRoot = dirname(distDir);                 // .../pi-coding-agent
 const piAiCandidates = [
   resolve(pkgRoot, 'node_modules/@earendil-works/pi-ai/dist/models.js'),
   resolve(pkgRoot, 'node_modules/@mariozechner/pi-ai/dist/models.js'),
+  resolve(pkgRoot, '../pi-ai/dist/models.js'),
 ];
+let searchDir = pkgRoot;
+for (let i = 0; i < 10; i++) {
+  for (const scope of ['@earendil-works', '@mariozechner']) {
+    piAiCandidates.push(resolve(searchDir, 'node_modules', scope, 'pi-ai/dist/models.js'));
+  }
+  const parent = dirname(searchDir);
+  if (parent === searchDir) break;
+  searchDir = parent;
+}
 // Ask Node to resolve Pi's dependency from the model-registry module as well.
 // This covers Bun/pnpm layouts where dependencies are linked outside pkgRoot.
 const requireFromPi = createRequire(modulePath);
@@ -146,7 +162,8 @@ process.stdout.write(JSON.stringify(result));
                 arguments: ["--input-type=module", "--eval", script],
                 currentDirectoryURL: nil,
                 timeout: 8,
-                environment: ["AGENT_DECK_MODEL_INPUT": inputText, "AGENT_DECK_PI_PATH": piPath]
+                environment: ["AGENT_DECK_MODEL_INPUT": inputText, "AGENT_DECK_PI_PATH": piPath,
+                              "AGENT_DECK_PI_PACKAGE_PATH": PiExecutableResolver.managedPackageRoot(piPath: piPath)?.path ?? ""]
             )
             guard result.exitCode == 0,
                   let data = result.stdout.data(using: .utf8),

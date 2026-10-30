@@ -41,6 +41,7 @@ final class NativeDiffPreviewTests: XCTestCase {
         canvas.layer?.backgroundColor = NSColor.black.cgColor
         canvas.addSubview(preview)
         let window = NSWindow(contentRect: canvas.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = canvas
         window.orderFrontRegardless()
         defer { window.close() }

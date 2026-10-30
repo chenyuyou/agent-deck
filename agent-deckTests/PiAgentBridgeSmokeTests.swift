@@ -3,6 +3,33 @@ import XCTest
 
 @MainActor
 final class PiAgentBridgeSmokeTests: XCTestCase {
+    func testModernPiWaitsForSettledBeforeCompletingRun() throws {
+        let directory = try PiTestSupport.temporaryProjectURL()
+        let executable = directory.appendingPathComponent("pi")
+        try #"{"name":"@earendil-works/pi-coding-agent","version":"1.4.0"}"#.write(to: directory.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        let script = """
+        #!/bin/sh
+        sleep 0.3
+        printf '%s\\n' '{"type":"agent_start"}' '{"type":"agent_end"}'
+        sleep 2
+        printf '%s\\n' '{"type":"agent_settled"}'
+        cat >/dev/null
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let previous = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
+        defer { restoreEnv("AGENT_DECK_PI_PATH", oldValue: previous) }
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiAgentRunnerService(store: store)
+        let session = store.createSession(kind: .project, title: "settled", project: try PiTestSupport.makeProject(url: directory), repository: nil)
+        runner.resume(session: session)
+        defer { runner.stop(sessionID: session.id, recordTranscript: false) }
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 2) { runner.isRunning(sessionID: session.id) })
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertEqual(store.sessions.first(where: { $0.id == session.id })?.status, .running)
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 4) { store.sessions.first(where: { $0.id == session.id })?.status == .idle })
+    }
     func testStreamingFlushCadenceUsesFixedSelectedPolicyAndAdaptiveBackgroundPolicy() {
         XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 0), 33_000_000)
         XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 10_000), 33_000_000)
@@ -873,7 +900,7 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
         XCTAssertTrue(enabledCommand.contains("--extension"))
         XCTAssertTrue(enabledCommand.contains("system-prompt-audit-bridge.ts"))
         XCTAssertTrue(enabledCommand.contains("agent-deck-ask-user-bridge.ts"))
-        XCTAssertTrue(enabledCommand.contains("agent-deck-web-access.ts"))
+        XCTAssertEqual(enabledCommand.contains("agent-deck-web-access.ts"), PiNativeSubagentBridgeExtensions.isExaConfigured(environment: EnvRuntimeEnvironment().environment()))
         XCTAssertTrue(enabledCommand.contains("agent-deck-openai-fast.ts"))
         XCTAssertTrue(enabledCommand.contains("managed-subagent-bridge.ts"))
         XCTAssertTrue(enabledCommand.contains("--append-system-prompt"))
@@ -906,7 +933,7 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
         XCTAssertTrue(disabledCommand.contains("--no-extensions"))
         XCTAssertTrue(disabledCommand.contains("system-prompt-audit-bridge.ts"))
         XCTAssertTrue(disabledCommand.contains("agent-deck-ask-user-bridge.ts"))
-        XCTAssertTrue(disabledCommand.contains("agent-deck-web-access.ts"))
+        XCTAssertEqual(disabledCommand.contains("agent-deck-web-access.ts"), PiNativeSubagentBridgeExtensions.isExaConfigured(environment: EnvRuntimeEnvironment().environment()))
         XCTAssertTrue(disabledCommand.contains("agent-deck-openai-fast.ts"))
         XCTAssertFalse(disabledCommand.contains("managed-subagent-bridge.ts"))
         XCTAssertFalse(disabledCommand.contains("--append-system-prompt"))

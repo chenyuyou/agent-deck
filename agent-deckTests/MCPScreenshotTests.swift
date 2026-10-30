@@ -117,6 +117,7 @@ final class MCPScreenshotTests: XCTestCase {
 
     private func hostAndSnapshot(_ view: NSView, appearanceDark: Bool, name: String) {
         let window = NSWindow(contentRect: view.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: appearanceDark ? .darkAqua : .aqua)
         window.contentView = view
         window.orderFrontRegardless()

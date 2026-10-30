@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct CommandResult: Hashable {
     let stdout: String
@@ -273,12 +274,14 @@ struct CommandRunner: CommandRunning {
 }
 
 private final class LockedProcessOutputCollector: @unchecked Sendable {
-    private let lock = NSLock()
+    private let lock = NSCondition()
     private let stdoutHandle: FileHandle
     private let stderrHandle: FileHandle
     nonisolated(unsafe) private var stdoutData = Data()
     nonisolated(unsafe) private var stderrData = Data()
     nonisolated(unsafe) private var didStop = false
+    nonisolated(unsafe) private var isDraining = false
+    nonisolated(unsafe) private var activeReaders = 0
 
     nonisolated init(stdout: FileHandle, stderr: FileHandle) {
         self.stdoutHandle = stdout
@@ -287,17 +290,50 @@ private final class LockedProcessOutputCollector: @unchecked Sendable {
 
     nonisolated func start() {
         stdoutHandle.readabilityHandler = { [weak self] handle in
-            self?.append(handle.availableData, toStdout: true)
+            self?.read(handle, toStdout: true)
         }
         stderrHandle.readabilityHandler = { [weak self] handle in
-            self?.append(handle.availableData, toStdout: false)
+            self?.read(handle, toStdout: false)
         }
     }
 
     nonisolated func drainRemainingData() {
-        guard !isStopped else { return }
-        append(stdoutHandle.availableData, toStdout: true)
-        append(stderrHandle.availableData, toStdout: false)
+        lock.lock()
+        guard !didStop else { lock.unlock(); return }
+        isDraining = true
+        lock.unlock()
+        stdoutHandle.readabilityHandler = nil
+        stderrHandle.readabilityHandler = nil
+        lock.lock()
+        while activeReaders > 0 && !didStop { lock.wait() }
+        let stopped = didStop
+        lock.unlock()
+        guard !stopped else { return }
+        drainAvailable(stdoutHandle, toStdout: true)
+        drainAvailable(stderrHandle, toStdout: false)
+    }
+
+    private nonisolated func read(_ handle: FileHandle, toStdout: Bool) {
+        lock.lock()
+        guard !didStop && !isDraining else { lock.unlock(); return }
+        activeReaders += 1
+        lock.unlock()
+        let data = handle.availableData
+        append(data, toStdout: toStdout)
+        lock.lock()
+        activeReaders -= 1
+        lock.broadcast()
+        lock.unlock()
+    }
+
+    private nonisolated func drainAvailable(_ handle: FileHandle, toStdout: Bool) {
+        let request = UInt(0x4004_667F) // Darwin FIONREAD
+        while true {
+            var available: Int32 = 0
+            guard ioctl(handle.fileDescriptor, request, &available) == 0, available > 0,
+                  let data = try? handle.read(upToCount: Int(available)), !data.isEmpty else { return }
+            append(data, toStdout: toStdout)
+        }
     }
 
     nonisolated func stop() {
@@ -307,6 +343,7 @@ private final class LockedProcessOutputCollector: @unchecked Sendable {
             return
         }
         didStop = true
+        lock.broadcast()
         lock.unlock()
 
         stdoutHandle.readabilityHandler = nil
@@ -341,12 +378,6 @@ private final class LockedProcessOutputCollector: @unchecked Sendable {
         lock.unlock()
     }
 
-    private nonisolated var isStopped: Bool {
-        lock.lock()
-        let value = didStop
-        lock.unlock()
-        return value
-    }
 }
 
 private final class LockedFinishGate: @unchecked Sendable {
