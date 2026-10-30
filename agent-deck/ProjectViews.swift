@@ -359,7 +359,7 @@ struct ProjectsScreen: View {
     }
 
     private func showProjectInFinder(_ project: DiscoveredProject) {
-        NSWorkspace.shared.activateFileViewerSelecting([project.url])
+        NSWorkspace.shared.open(project.url)
     }
 
     private var projectList: some View {
@@ -566,8 +566,8 @@ struct ProjectsScreen: View {
                     .appActionTarget()
             }
             .buttonStyle(.plain)
-            .help("Show in Finder")
-            .accessibilityLabel("Show \(project.repositoryDisplayName) in Finder")
+            .help("Open project folder in Finder")
+            .accessibilityLabel("Open \(project.repositoryDisplayName) folder in Finder")
 
             Button(role: .destructive) {
                 showProjectRemovalConfirmation(for: project)
@@ -593,7 +593,7 @@ struct ProjectsScreen: View {
             Button {
                 showProjectInFinder(project)
             } label: {
-                Label("Show in Finder", systemImage: "folder")
+                Label("Open folder in Finder", systemImage: "folder")
             }
 
             Button(role: .destructive) {

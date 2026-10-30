@@ -4067,14 +4067,20 @@ private struct PiAgentSessionGroupHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
+            if section.isProjectGroup {
+                Button {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: section.id, isDirectory: true))
+                } label: {
+                    ProjectIconView(imageURL: section.iconFileURL, symbolName: section.fallbackSymbolName, size: 30, assetName: section.assetName)
+                }
+                .buttonStyle(.plain)
+                .help("Open project folder in Finder: \(section.id)")
+                .accessibilityLabel("Open \(section.title) folder in Finder")
+            } else {
+                ProjectIconView(imageURL: section.iconFileURL, symbolName: section.fallbackSymbolName, size: 30, assetName: section.assetName)
+            }
             Button(action: onToggleCollapse) {
                 HStack(alignment: .center, spacing: 8) {
-                    ProjectIconView(
-                        imageURL: section.iconFileURL,
-                        symbolName: section.fallbackSymbolName,
-                        size: 30,
-                        assetName: section.assetName
-                    )
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(alignment: .center, spacing: 5) {
                             Text(section.title)
