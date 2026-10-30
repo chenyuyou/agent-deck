@@ -3,6 +3,36 @@ import XCTest
 
 final class PiAgentLaunchResolverTests: XCTestCase {
     @MainActor
+    func testSessionOverridesResolvePerAgentForDisplayAndLaunch() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        var session = store.createSession(kind: .project, title: "Test", project: try PiTestSupport.makeProject(), repository: nil)
+        session.agentLaunchOverrides = ["explorer": .init(model: .value("openai/default"), thinking: .value("low"))]
+        let explorer = AppViewModel.applyingSessionLaunchOverrides(to: effectiveAgent(name: "explorer", id: "explorer"), session: session)
+        let reviewer = effectiveAgent(name: "reviewer", id: "reviewer")
+        session.agentLaunchOverrides = [
+            "explorer": .init(model: .value("openai/chosen"), thinking: .value("high")),
+            "reviewer": .init(model: .value("other/reviewer"), thinking: .value("medium"))
+        ]
+
+        let displayed = AppViewModel.applyingSessionLaunchOverrides(to: explorer, session: session)
+        let other = AppViewModel.applyingSessionLaunchOverrides(to: reviewer, session: session)
+        XCTAssertEqual(displayed.resolved.model, "openai/chosen")
+        XCTAssertEqual(displayed.resolved.thinking, "high")
+        XCTAssertEqual(other.resolved.model, "other/reviewer")
+        XCTAssertEqual(other.resolved.thinking, "medium")
+        XCTAssertEqual(PiSubagentLaunchPlanner.modelSelection(for: displayed, parentSession: session).modelArgument, "openai/chosen:high")
+
+        session.agentLaunchOverrides = ["explorer": .init(model: .piDefault, thinking: .piDefault)]
+        let piDefault = AppViewModel.applyingSessionLaunchOverrides(to: explorer, session: session)
+        XCTAssertNil(piDefault.resolved.model)
+        XCTAssertNil(piDefault.resolved.thinking)
+        session.agentLaunchOverrides = nil
+        let restored = AppViewModel.applyingSessionLaunchOverrides(to: explorer, session: session)
+        XCTAssertEqual(restored.resolved.model, "openai/default")
+        XCTAssertEqual(restored.resolved.thinking, "low")
+    }
+
+    @MainActor
     func testBuiltinOverrideSkillReferenceReplacementChangesOnlyMatchingSkills() throws {
         let root: [String: Any] = [
             "unrelated": ["kept": true],

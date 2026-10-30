@@ -7923,10 +7923,10 @@ final class AppViewModel: NSObject {
         var seen = Set<String>()
         return agents
             .filter { $0.resolved.disabled != true && seen.insert($0.name).inserted }
-            .map { applyingSessionLaunchOverrides(to: $0, session: session) }
+            .map { Self.applyingSessionLaunchOverrides(to: $0, session: session) }
     }
 
-    private func applyingSessionLaunchOverrides(to agent: EffectiveAgentRecord, session: PiAgentSessionRecord) -> EffectiveAgentRecord {
+    static func applyingSessionLaunchOverrides(to agent: EffectiveAgentRecord, session: PiAgentSessionRecord) -> EffectiveAgentRecord {
         guard let override = session.agentLaunchOverrides?[agent.name] else { return agent }
         var resolved = agent.resolved
         switch override.model {

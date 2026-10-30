@@ -566,6 +566,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         }
         let universe = viewModel.selectableAgentUniverse(forProjectPath: projectPath)
             .filter { $0.resolved.disabled != true }
+            .map { AppViewModel.applyingSessionLaunchOverrides(to: $0, session: session) }
         let defaultNames = Set(
             viewModel.startupSnapshot(forProjectPath: projectPath).effectiveAgents
                 .filter { $0.resolved.disabled != true }
