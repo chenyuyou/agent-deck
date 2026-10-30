@@ -3788,12 +3788,19 @@ final class PiAgentSessionStore {
         let base = URL(fileURLWithPath: basePath, isDirectory: true).standardizedFileURL
         let temp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).standardizedFileURL
 
-        let candidate: URL
+        var candidate: URL
         if value.lowercased().hasPrefix("file://"), let url = URL(string: value) {
             candidate = url.standardizedFileURL
         } else {
-            let url = URL(fileURLWithPath: value)
-            candidate = url.path.hasPrefix("/") ? url.standardizedFileURL : base.appendingPathComponent(value).standardizedFileURL
+            candidate = value.hasPrefix("/") ? URL(fileURLWithPath: value).standardizedFileURL : base.appendingPathComponent(value).standardizedFileURL
+        }
+
+        // Markdown destinations may percent-encode Unicode and spaces. Prefer an
+        // existing literal path so filenames containing '%' remain unambiguous.
+        if !FileManager.default.fileExists(atPath: candidate.path),
+           !value.lowercased().hasPrefix("file://"),
+           let decoded = value.removingPercentEncoding, decoded != value {
+            candidate = decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded).standardizedFileURL : base.appendingPathComponent(decoded).standardizedFileURL
         }
 
         guard FileManager.default.fileExists(atPath: candidate.path) else { return nil }

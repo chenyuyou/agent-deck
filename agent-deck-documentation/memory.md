@@ -47,6 +47,7 @@ The current implementation includes:
 - Parent-session memory recall at launch.
 - Native subagent memory recall at launch.
 - On-device semantic recall via `NLContextualEmbedding` (Natural Language framework), with a per-project vector cache, hybrid-ranked with lexical term-overlap evidence.
+- Chinese recall also compares adjacent Han-character pairs, so unspaced phrases can contribute lexical evidence. This is a heuristic and does not replace model-specific language understanding.
 - Native chat cards for recalled, stored, edited, stale, archived, and blocked memory events.
 
 Memory is not learned by silently scraping every conversation. Agents receive explicit memory tools and a memory policy. When an agent identifies durable project knowledge, it calls the write tool; Agent Deck scans the content, saves the Markdown file, updates the project manifest, and records a transcript card. The vector cache is refreshed lazily on the next recall (staleness is detected by content hash), so writes never block on embedding.

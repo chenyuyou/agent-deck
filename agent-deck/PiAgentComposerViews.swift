@@ -212,6 +212,7 @@ struct PiAgentComposerBox: View {
                         attachmentError = "Dictation is unavailable. Enable Dictation in System Settings > Keyboard, then try again."
                     }
                 )
+                .id(footerSession?.id)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .frame(minHeight: 92, maxHeight: 132)
@@ -539,9 +540,13 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scrollView.documentView as? DropSafeNSTextView else { return }
-        if textView.string != text {
+        // A SwiftUI refresh can arrive while the IME's marked text has not yet
+        // propagated through textDidChange. Do not replace it with the unchanged
+        // binding; an actual external draft change still takes precedence.
+        if textView.string != text && !(textView.hasMarkedText() && text == context.coordinator.lastSynchronizedText) {
             textView.string = text
         }
+        context.coordinator.lastSynchronizedText = text
         textView.isEditable = !isDisabled
         textView.font = NativeTranscriptFont.body()
         textView.dropHandler = context.coordinator
@@ -565,6 +570,7 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate, DropSafeNSTextViewDropHandler, DropSafeNSTextViewKeyHandler {
         var parent: PiAgentDropSafeTextEditor
+        var lastSynchronizedText: String
         // Tracks the last value pushed to SwiftUI so draggingUpdated (which fires
         // on every mouse move during drag) doesn't write the same value over and
         // over. Each write re-renders the parent and re-registers its .onDrop,
@@ -573,10 +579,12 @@ struct PiAgentDropSafeTextEditor: NSViewRepresentable {
 
         init(parent: PiAgentDropSafeTextEditor) {
             self.parent = parent
+            self.lastSynchronizedText = parent.text
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            lastSynchronizedText = textView.string
             parent.text = textView.string
         }
 

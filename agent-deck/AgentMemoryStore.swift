@@ -288,7 +288,7 @@ final class AgentMemoryStore: ObservableObject {
         // identifiers) qualified junk in the realistic eval, while a real match's
         // curated fields always carry the topic. This also means the gate never
         // reads bodies off disk.
-        let queryTerms = Self.informativeTerms(in: trimmedQuery)
+        let queryTerms = Self.recallTerms(in: trimmedQuery)
         // Corpus document frequency per informative term, used to down-weight the
         // dominant-theme vocabulary (see `discriminativeMinDocCount`). Computed over
         // the same injectable set being ranked, so it adapts to whatever the project
@@ -297,7 +297,7 @@ final class AgentMemoryStore: ObservableObject {
         let corpusSize = injectable.count
         let overlapByID = Dictionary(uniqueKeysWithValues: injectable.map { record -> (String, Int) in
             let gateText = "\(record.title)\n\(record.summary)\n\(record.tags.joined(separator: " "))"
-            let shared = queryTerms.intersection(Self.informativeTerms(in: gateText))
+            let shared = queryTerms.intersection(Self.recallTerms(in: gateText))
             return (record.id, Self.discriminativeOverlapCount(shared: shared, docFrequency: docFrequency, corpusSize: corpusSize))
         })
 
@@ -341,7 +341,8 @@ final class AgentMemoryStore: ObservableObject {
             if centered && entry.rawScore >= Self.strongTopSimilarity {
                 return overlap >= Self.strongMinTermOverlap
             }
-            return overlap >= Self.minQueryTermOverlap
+            let minimum = queryTerms.count == 1 && Self.containsCJKBigram(trimmedQuery) ? 1 : Self.minQueryTermOverlap
+            return overlap >= minimum
         }
         let breakdown = ranked.map { entry in
             let mark = qualified.contains(where: { $0.record.id == entry.record.id }) ? "+" : "-"
@@ -571,6 +572,36 @@ final class AgentMemoryStore: ObservableObject {
         return terms
     }
 
+    /// CJK text commonly has no spaces. Add adjacent Han character pairs for
+    /// recall, while keeping duplicate detection's existing lexical policy.
+    nonisolated static func recallTerms(in text: String) -> Set<String> {
+        var terms = informativeTerms(in: text)
+        var previous: Unicode.Scalar?
+        for scalar in text.lowercased().unicodeScalars {
+            guard isHan(scalar) else { previous = nil; continue }
+            if let previous { terms.insert(String(String.UnicodeScalarView([previous, scalar]))) }
+            previous = scalar
+        }
+        return terms
+    }
+
+    nonisolated static func containsCJKBigram(_ text: String) -> Bool {
+        var previousIsHan = false
+        for scalar in text.unicodeScalars {
+            let currentIsHan = isHan(scalar)
+            if previousIsHan && currentIsHan { return true }
+            previousIsHan = currentIsHan
+        }
+        return false
+    }
+
+    private nonisolated static func isHan(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF, 0x20000...0x323AF: return true
+        default: return false
+        }
+    }
+
     /// Document frequency of each informative term across the curated gate text
     /// (title + summary + tags) of the given records. Used by recall to detect
     /// corpus-wide background vocabulary that the static `overlapStopwords` list
@@ -579,7 +610,7 @@ final class AgentMemoryStore: ObservableObject {
         var df: [String: Int] = [:]
         for record in records {
             let gateText = "\(record.title)\n\(record.summary)\n\(record.tags.joined(separator: " "))"
-            for term in informativeTerms(in: gateText) {
+            for term in recallTerms(in: gateText) {
                 df[term, default: 0] += 1
             }
         }

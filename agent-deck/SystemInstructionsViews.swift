@@ -590,13 +590,25 @@ struct PiPromptPreviewSheet: View {
         return "\(lines) · \(size) · \(tokenEstimate(for: text))"
     }
 
-    // A rough chars-per-token heuristic — enough to gauge context budget, not
-    // an exact tokenizer count, hence the "≈".
     private func tokenEstimate(for text: String) -> String {
-        let tokens = max(1, text.count / 4)
+        let tokens = PromptTokenEstimate.estimate(text)
         guard tokens >= 1000 else { return "≈\(tokens) tokens" }
         let thousands = (Double(tokens) / 1000).formatted(.number.precision(.fractionLength(0...1)))
         return "≈\(thousands)k tokens"
+    }
+}
+
+/// Display-only approximation; actual tokenization depends on the chosen model.
+enum PromptTokenEstimate {
+    nonisolated static func estimate(_ text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        var ascii = 0
+        var other = 0
+        for character in text {
+            if character.unicodeScalars.allSatisfy({ $0.isASCII }) { ascii += 1 }
+            else { other += 1 }
+        }
+        return max(1, Int(ceil(Double(ascii) / 4.0 + Double(other))))
     }
 }
 

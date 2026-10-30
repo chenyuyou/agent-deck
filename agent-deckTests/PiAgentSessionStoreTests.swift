@@ -580,6 +580,30 @@ final class PiAgentSessionStoreTests: XCTestCase {
         })
     }
 
+    func testPercentEncodedChineseImagePathMaterializesFromProject() throws {
+        let root = try PiTestSupport.temporaryProjectURL()
+        let image = root.appendingPathComponent("截图 示例.png")
+        let bytes = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="))
+        try bytes.write(to: image)
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "图片", project: try PiTestSupport.makeProject(url: root), repository: nil)
+        store.append(.init(sessionID: session.id, role: .assistant, title: "Assistant", text: "![截图](%E6%88%AA%E5%9B%BE%20%E7%A4%BA%E4%BE%8B.png)"))
+        let path = try XCTUnwrap(store.transcriptsBySessionID[session.id]?.first?.imageReferences.first?.localPath)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+    }
+
+    func testRelativeImagePrefersExistingLiteralPercentFilename() throws {
+        let root = try PiTestSupport.temporaryProjectURL()
+        let bytes = Data("literal".utf8)
+        try bytes.write(to: root.appendingPathComponent("%E6%88%AA.png"))
+        try Data("decoded".utf8).write(to: root.appendingPathComponent("截.png"))
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "图片", project: try PiTestSupport.makeProject(url: root), repository: nil)
+        store.append(.init(sessionID: session.id, role: .assistant, title: "Assistant", text: "![截图](%E6%88%AA.png)"))
+        let path = try XCTUnwrap(store.transcriptsBySessionID[session.id]?.first?.imageReferences.first?.localPath)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+    }
+
     func testToolTextMarkdownImagesDoNotMaterialize() throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let session = store.createSession(kind: .project, title: "Tool Text Images", project: try PiTestSupport.makeProject(), repository: nil)

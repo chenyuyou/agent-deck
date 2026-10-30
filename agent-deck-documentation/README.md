@@ -6,6 +6,8 @@ In the session composer, Return sends the message once text input is complete. W
 
 Local file links in coding-agent messages resolve relative paths against the session's working directory, including its worktree when present. Absolute file paths open directly with the system's default application.
 
+Transcript image references resolve relative to the session project or worktree, including percent-encoded Chinese filenames. The system-prompt preview token count is an approximate estimate that accounts for non-ASCII text; actual token counts depend on the model.
+
 ## Concepts
 
 - [Pi runtime vs Agent Deck](concepts/pi-runtime-vs-agent-deck.md) — where Pi ends and the app begins.
