@@ -1,5 +1,5 @@
 {
-  "originHash" : "f950e68fa932d9e43b1b1fcacdc5ba1b609c3eb48bfa9e3a0bb0a0b1468b8967",
+  "originHash" : "5b0c35d83aa570a625597f7ab0ec7c97109fe048e29b2dd676a2dee2e4ba26c2",
   "pins" : [
     {
       "identity" : "lottie-spm",
@@ -8,6 +8,14 @@
       "state" : {
         "revision" : "69faaefa7721fba9e434a52c16adf4329c9084db",
         "version" : "4.6.0"
+      }
+    },
+    {
+      "identity" : "mathjaxswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/colinc86/MathJaxSwift.git",
+      "state" : {
+        "revision" : "00e9c3df6b1c82031c7fe3785028f3d21c0d73ba"
       }
     },
     {
@@ -26,6 +34,14 @@
       "state" : {
         "revision" : "6276ba2b404829d139c45ff98427cf90e2efc59b",
         "version" : "2.9.2"
+      }
+    },
+    {
+      "identity" : "swiftmath",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mgriebling/SwiftMath.git",
+      "state" : {
+        "revision" : "0b0222e102ba415b352cd29f334075622bd4e6aa"
       }
     }
   ],

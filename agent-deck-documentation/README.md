@@ -8,6 +8,8 @@ Local file links in coding-agent messages resolve relative paths against the ses
 
 Transcript image references resolve relative to the session project or worktree, including percent-encoded Chinese filenames. The system-prompt preview token count is an approximate estimate that accounts for non-ASCII text; actual token counts depend on the model.
 
+Conversation Markdown renders supported LaTeX math locally using MathJax, including `$…$`, `$$…$$`, `\(…\)` and `\[…\]`, common standalone `equation`, `align`, and matrix environments, as well as multiline bracketed formulas containing TeX commands. Conversion happens in the background; a native renderer provides an initial or fallback display. Standalone display formulas are centered; inline formulas stay with surrounding text. Outer `\boxed{…}` formulas have a visible border, and long plain `\text{…}` inside a box wraps. Code remains literal, and unsupported or incomplete formulas are not typeset. Selecting and copying a rendered formula copies its original markup.
+
 ## Concepts
 
 - [Pi runtime vs Agent Deck](concepts/pi-runtime-vs-agent-deck.md) — where Pi ends and the app begins.

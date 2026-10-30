@@ -50,6 +50,8 @@ Use this file to quickly find the source of a behavior.
 - `agent-deck/GitHubViews.swift`, `GitHubIssuesViews.swift`, `GitHubRepoChangesViews.swift`, `GitHubConnectionViews.swift` — GitHub screen and feature sections
 - `agent-deck/SettingsAndCatalogViews.swift` — settings, extensions, models, subagent config screens
 - `agent-deck/MarkdownViews.swift` — markdown rendering
+- `agent-deck/MarkdownMath.swift` — local LaTeX detection, typesetting, and source-preserving attachments for Markdown
+- `agent-deck/MathJaxRenderer.swift` — serialized background MathJax conversion with restricted extensions
 - `agent-deck/LoopBankViews.swift`, `LoopLaunchViews.swift`, `PiAgentLoopControlBar.swift` — loop editing, launch preflight, and run controls
 
 ## GitHub and Git

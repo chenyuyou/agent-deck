@@ -422,6 +422,7 @@ final class MarkdownSourceApplier {
 
     func apply(source: String, to view: NativeMarkdownTextContainer) {
         let displaySource = StreamingMarkdownBalancer.balance(source)
+        view.mathSource = displaySource
 
         // Synchronous fast paths — no wobble, height stays exact this frame:
         //  • cache hit (re-render, scroll-back, unchanged text), or
@@ -465,6 +466,7 @@ final class NativeMarkdownTextContainer: NSView {
     var openLocalLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
+    fileprivate var mathSource = ""
     private var lastStyleRevision = -1
 #if DEBUG
     /// Summary of the most recent `configure(document:)` on ANY container, read
@@ -524,7 +526,17 @@ final class NativeMarkdownTextContainer: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         setupStackView()
+        NotificationCenter.default.addObserver(self, selector: #selector(mathJaxDidUpdate(_:)), name: MarkdownMath.mathJaxUpdated, object: nil)
     }
+
+    @objc private func mathJaxDidUpdate(_ notification: Notification) {
+        guard !isDismantled, let formulae = notification.object as? [String],
+              formulae.contains(where: { mathSource.contains($0) }), let document = lastDocument else { return }
+        lastDocument = nil
+        configure(document: document)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     required init?(coder: NSCoder) { fatalError() }
 
@@ -1408,7 +1420,7 @@ final class NativeMarkdownTextContainer: NSView {
     private static let attributedStringCacheLimit = 512
 
     private static func attributedString(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool) -> NSAttributedString {
-        let key = "\(ThemeManager.shared.revision)|\(parseInlineMarkdown ? 1 : 0)|\(font.fontName):\(font.pointSize)|\(color.description)|\(source)"
+        let key = "\(ThemeManager.shared.revision)|\(MarkdownMath.mathJaxRevision)|\(parseInlineMarkdown ? 1 : 0)|\(font.fontName):\(font.pointSize)|\(color.description)|\(source)"
         if let cached = attributedStringCache[key] { return cached }
         let result = buildAttributedString(source, font: font, color: color, parseInlineMarkdown: parseInlineMarkdown)
         attributedStringCache[key] = result
@@ -1423,9 +1435,11 @@ final class NativeMarkdownTextContainer: NSView {
     private static func buildAttributedString(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         let base: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
-        guard parseInlineMarkdown,
-              let attributed = try? AttributedString(
-                markdown: source,
+        guard parseInlineMarkdown else { return NSAttributedString(string: source, attributes: base) }
+        let prepared = MarkdownMath.prepare(source, font: font, color: color)
+        if prepared.isStandaloneDisplay { paragraph.alignment = .center }
+        guard let attributed = try? AttributedString(
+                markdown: prepared.text,
                 options: AttributedString.MarkdownParsingOptions(
                     interpretedSyntax: .inlineOnlyPreservingWhitespace,
                     failurePolicy: .returnPartiallyParsedIfPossible
@@ -1440,6 +1454,7 @@ final class NativeMarkdownTextContainer: NSView {
         mutable.addAttribute(.paragraphStyle, value: paragraph, range: fullRange)
         applyBaseFont(font, preservingInlineTraitsIn: mutable)
         MarkdownSemanticStyler.applyInlineColors(to: mutable)
+        MarkdownMath.apply(prepared, to: mutable)
         return mutable
     }
 
@@ -1650,6 +1665,27 @@ enum MarkdownLocalLinkResolver {
 }
 
 private class MarkdownLinkTextView: NSTextView, NSTextViewDelegate {
+    override func copy(_ sender: Any?) {
+        guard let storage = textStorage, !selectedRanges.isEmpty else { super.copy(sender); return }
+        var pieces: [String] = []
+        var containsMath = false
+        for value in selectedRanges {
+            let selected = value.rangeValue
+            guard selected.length > 0, NSMaxRange(selected) <= storage.length else { continue }
+            let segment = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: selected))
+            var replacements: [(NSRange, String)] = []
+            segment.enumerateAttribute(MarkdownMath.sourceAttribute, in: NSRange(location: 0, length: segment.length)) { value, range, _ in
+                if let source = value as? String { replacements.append((range, source)) }
+            }
+            containsMath = containsMath || !replacements.isEmpty
+            for (range, source) in replacements.reversed() { segment.replaceCharacters(in: range, with: source) }
+            pieces.append(segment.string)
+        }
+        guard containsMath else { super.copy(sender); return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pieces.joined(separator: "\n"), forType: .string)
+    }
+
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let url: URL?
         if let value = link as? URL { url = value }
@@ -2020,6 +2056,41 @@ private nonisolated struct MarkdownBlock: Identifiable, Hashable {
                 code.append(strippingFenceIndent(line))
                 lineIndex += 1
                 continue
+            }
+            // Some agents emit complete display environments without $$ or \[.
+            // Keep multiline environments together, including blank lines.
+            if trimmed.hasPrefix("\\begin{"), let closeBrace = trimmed.firstIndex(of: "}") {
+                let name = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 7)..<closeBrace])
+                let supported = Set(["equation", "equation*", "align", "align*", "alignat", "alignat*", "gather", "gather*", "multline", "multline*", "flalign", "flalign*", "split", "cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix"])
+                if supported.contains(name) {
+                    let closing = "\\end{\(name)}"
+                    if let end = (lineIndex..<lines.count).first(where: { lines[$0].contains(closing) }) {
+                        appendSimple(.paragraph(lines[lineIndex...end].joined(separator: "\n")))
+                        lineIndex = end + 1
+                        continue
+                    }
+                }
+            }
+            // Complete display math is its own paragraph even next to prose or
+            // when it contains blank lines. Leave incomplete streams unchanged.
+            let mathClosing: String?
+            switch trimmed {
+            case "$$": mathClosing = "$$"
+            case "\\[": mathClosing = "\\]"
+            case "[": mathClosing = "]"
+            default: mathClosing = nil
+            }
+            if let mathClosing, lineIndex + 1 < lines.count,
+               let end = ((lineIndex + 1)..<lines.count).first(where: {
+                   lines[$0].trimmingCharacters(in: .whitespaces) == mathClosing
+               }) {
+                let contents = lines[(lineIndex + 1)..<end].joined(separator: "\n")
+                if trimmed != "[" || contents.contains("\\") {
+                    let formula = ([line] + Array(lines[(lineIndex + 1)...end])).joined(separator: "\n")
+                    appendSimple(.paragraph(formula))
+                    lineIndex = end + 1
+                    continue
+                }
             }
             if trimmed.isEmpty {
                 flushParagraph()
@@ -2728,6 +2799,7 @@ private enum TranscriptAttributedStringCache {
         var hasher = Hasher()
         hasher.combine(source)
         hasher.combine(ThemeManager.shared.revision)
+        hasher.combine(MarkdownMath.mathJaxRevision)
         return "\(source.count):\(hasher.finalize())"
     }
 
@@ -2936,7 +3008,8 @@ private enum TranscriptAttributedStringCache {
     /// then applies the base attributes while preserving the per-run trait choices
     /// (bold, italic, monospaced) the inline parser produced.
     private static func inlineAttributedString(for source: String, baseAttributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
-        guard let attributed = MarkdownInlineRenderCache.attributedString(for: source) else {
+        let prepared = MarkdownMath.prepare(source, font: baseAttributes[.font] as? NSFont ?? NativeMarkdownFont.body, color: baseAttributes[.foregroundColor] as? NSColor ?? .labelColor)
+        guard let attributed = MarkdownInlineRenderCache.attributedString(for: prepared.text) else {
             return NSAttributedString(string: source, attributes: baseAttributes)
         }
         let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
@@ -2948,6 +3021,12 @@ private enum TranscriptAttributedStringCache {
             applyBaseFontPreservingInlineTraits(baseFont, in: mutable)
         }
         MarkdownSemanticStyler.applyInlineColors(to: mutable)
+        if prepared.isStandaloneDisplay {
+            let centered = (baseAttributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            centered.alignment = .center
+            mutable.addAttribute(.paragraphStyle, value: centered, range: fullRange)
+        }
+        MarkdownMath.apply(prepared, to: mutable)
         return mutable
     }
 

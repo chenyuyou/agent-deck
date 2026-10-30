@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A118E0019E2E4A2A89175011 /* MathJaxSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A118E0039E2E4A2A89175011 /* MathJaxSwift */; };
+		A117E0019E2E4A2A89175011 /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = A117E0039E2E4A2A89175011 /* SwiftMath */; };
 		5A92B5039E2E4A2A89175011 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A92B5029E2E4A2A89175011 /* Sparkle */; };
 		7C4E10039E2E4A2A89175011 /* Lottie in Frameworks */ = {isa = PBXBuildFile; productRef = 7C4E10029E2E4A2A89175011 /* Lottie */; };
 		8F5A2A6925B14789B7C0D431 /* bundled-agents in Resources */ = {isa = PBXBuildFile; fileRef = 4E1F0B28C6D84725B47F2D75 /* bundled-agents */; };
@@ -74,6 +76,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A118E0019E2E4A2A89175011 /* MathJaxSwift in Frameworks */,
+				A117E0019E2E4A2A89175011 /* SwiftMath in Frameworks */,
 				5A92B5039E2E4A2A89175011 /* Sparkle in Frameworks */,
 				7C4E10039E2E4A2A89175011 /* Lottie in Frameworks */,
 				D2A5E8012FB0000000000001 /* PostHog in Frameworks */,
@@ -132,6 +136,8 @@
 			);
 			name = "agent-deck";
 			packageProductDependencies = (
+				A118E0039E2E4A2A89175011 /* MathJaxSwift */,
+				A117E0039E2E4A2A89175011 /* SwiftMath */,
 				5A92B5029E2E4A2A89175011 /* Sparkle */,
 				7C4E10029E2E4A2A89175011 /* Lottie */,
 				D2A5E8032FB0000000000001 /* PostHog */,
@@ -192,6 +198,8 @@
 			mainGroup = 6572B1622FA2391500596CE4;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				A118E0029E2E4A2A89175011 /* XCRemoteSwiftPackageReference "MathJaxSwift" */,
+				A117E0029E2E4A2A89175011 /* XCRemoteSwiftPackageReference "SwiftMath" */,
 				5A92B5019E2E4A2A89175011 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				7C4E10019E2E4A2A89175011 /* XCRemoteSwiftPackageReference "lottie-spm" */,
 				D2A5E8022FB0000000000001 /* XCRemoteSwiftPackageReference "posthog-ios" */,
@@ -580,6 +588,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		A118E0029E2E4A2A89175011 /* XCRemoteSwiftPackageReference "MathJaxSwift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/colinc86/MathJaxSwift.git";
+			requirement = { kind = revision; revision = 00e9c3df6b1c82031c7fe3785028f3d21c0d73ba; };
+		};
+		A117E0029E2E4A2A89175011 /* XCRemoteSwiftPackageReference "SwiftMath" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mgriebling/SwiftMath.git";
+			requirement = { kind = revision; revision = 0b0222e102ba415b352cd29f334075622bd4e6aa; };
+		};
 		5A92B5019E2E4A2A89175011 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
@@ -607,6 +625,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A118E0039E2E4A2A89175011 /* MathJaxSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A118E0029E2E4A2A89175011 /* XCRemoteSwiftPackageReference "MathJaxSwift" */;
+			productName = MathJaxSwift;
+		};
+		A117E0039E2E4A2A89175011 /* SwiftMath */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A117E0029E2E4A2A89175011 /* XCRemoteSwiftPackageReference "SwiftMath" */;
+			productName = SwiftMath;
+		};
 		5A92B5029E2E4A2A89175011 /* Sparkle */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5A92B5019E2E4A2A89175011 /* XCRemoteSwiftPackageReference "Sparkle" */;
