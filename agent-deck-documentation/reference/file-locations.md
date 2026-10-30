@@ -23,6 +23,8 @@ This page lists the important paths Agent Deck scans or writes.
 
 The session index and transcript files are app-managed. Agent Deck writes the index atomically, preserves the previously decoded generation as the last-known-good backup, and automatically uses that backup when the primary index is missing or cannot be decoded. During launch, existing project-backed sessions retain their project grouping while project discovery finishes.
 
+The Sessions panel offers **Recent activity** and **By project** views, also configurable in settings. The choice is remembered. Project groups include older sessions; independent chats and Agent Deck Builder have separate groups. Sessions whose saved project is no longer discovered appear under **Project Not Found**; this does not imply the files have been deleted. Switching views does not change session ownership, the Pi history, or the working directory.
+
 ## Agents
 
 | Scope | Path |

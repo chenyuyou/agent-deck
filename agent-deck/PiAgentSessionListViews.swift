@@ -398,6 +398,7 @@ struct PiAgentSessionRow: View, Equatable {
     let isGeneratingTitle: Bool
     let hasActiveLoop: Bool
     let gitActivity: PiAgentSessionGitActivity
+    var projectMissing: Bool = false
     let onSelect: () -> Void
     let onBeginRename: () -> Void
     let onEndRename: () -> Void
@@ -420,6 +421,7 @@ struct PiAgentSessionRow: View, Equatable {
             && lhs.isGeneratingTitle == rhs.isGeneratingTitle
             && lhs.hasActiveLoop == rhs.hasActiveLoop
             && lhs.gitActivity == rhs.gitActivity
+            && lhs.projectMissing == rhs.projectMissing
     }
 
     @State private var draftTitle = ""
@@ -479,6 +481,7 @@ struct PiAgentSessionRow: View, Equatable {
             }
             .font(AppTheme.Font.footnote)
             .foregroundStyle(AppTheme.mutedText)
+            .help(session.projectPath.isEmpty ? subtitle : session.projectPath)
 
             if let branch = session.branchName, !branch.isEmpty {
                 HStack(spacing: 6) {
@@ -528,7 +531,7 @@ struct PiAgentSessionRow: View, Equatable {
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded(onSelect))
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("Open session \(sessionTitle)")
+        .accessibilityLabel("Open session \(sessionTitle), \(subtitle)")
         .accessibilityAction(named: Text("Open session"), onSelect)
         .focusable()
         .onKeyPress(.space) {
@@ -709,11 +712,10 @@ struct PiAgentSessionRow: View, Equatable {
     }
 
     private var subtitle: String {
-        if session.isNoProject { return session.projectNameForDisplay }
-        if let repository = session.repository {
-            return repository
-        }
-        return session.projectName
+        if session.isAgentDeckBuilderSession { return session.projectNameForDisplay }
+        if session.isNoProject { return "Independent session" }
+        let name = session.repository ?? session.projectName
+        return projectMissing ? "Project not found: \(name)" : name
     }
 
     private var statusHelp: String {

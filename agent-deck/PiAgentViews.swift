@@ -3850,6 +3850,7 @@ private struct SessionListContent: View, Equatable {
     let activeLoopSessionIDs: Set<UUID>
     let activityByID: [UUID: PiAgentSessionGitActivity]
     let projectByPath: [String: DiscoveredProject]
+    var projectDiscoveryComplete: Bool = false
     let compactSessionIDs: Set<UUID>
     /// Snapshot of `scrollRequest`'s value at construction, compared in `==`.
     /// The binding itself can't be compared: both sides read the same live
@@ -3893,6 +3894,7 @@ private struct SessionListContent: View, Equatable {
         else if lhs.activeLoopSessionIDs != rhs.activeLoopSessionIDs { diff = "activeLoopSessionIDs" }
         else if lhs.activityByID != rhs.activityByID { diff = "activityByID" }
         else if lhs.projectByPath != rhs.projectByPath { diff = "projectByPath" }
+        else if lhs.projectDiscoveryComplete != rhs.projectDiscoveryComplete { diff = "projectDiscoveryComplete" }
         else if lhs.compactSessionIDs != rhs.compactSessionIDs { diff = "compactSessionIDs" }
         // A pending scroll request must defeat the equatable gate, or the
         // inner AppList's onChange never sees the new value and the jump to
@@ -3997,6 +3999,7 @@ private struct SessionListContent: View, Equatable {
                 CodingAgentRecentRow(
                     session: session,
                     project: projectByPath[session.projectPath],
+                    projectDiscoveryComplete: projectDiscoveryComplete,
                     isSelected: selectedSessionIDs.contains(session.id),
                     isRunning: workingSessionIDs.contains(session.id),
                     hasUIRequest: uiRequestSessionIDs.contains(session.id),
@@ -4006,7 +4009,7 @@ private struct SessionListContent: View, Equatable {
                 .equatable()
                 .simultaneousGesture(TapGesture().onEnded { onSelect(session) })
                 .accessibilityAddTraits(.isButton)
-                .accessibilityLabel("Open session \(session.displayTitle)")
+                .accessibilityLabel("Open session \(session.displayTitle), \(session.projectNameForDisplay)")
                 .accessibilityAction { onSelect(session) }
                 .focusable()
                 .onKeyPress(.space) {
@@ -4023,6 +4026,7 @@ private struct SessionListContent: View, Equatable {
                     isGeneratingTitle: generatingTitleIDs.contains(session.id),
                     hasActiveLoop: activeLoopSessionIDs.contains(session.id),
                     gitActivity: activityByID[session.id] ?? .none,
+                    projectMissing: projectDiscoveryComplete && !session.isNoProject && projectByPath[session.projectPath] == nil,
                     onSelect: { onSelect(session) },
                     onBeginRename: { onBeginRename(session) },
                     onEndRename: onEndRename,
@@ -4077,6 +4081,9 @@ private struct PiAgentSessionGroupHeader: View {
                                 .font(AppTheme.Font.footnote.weight(.semibold))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
+                            Text("\(section.totalCount)")
+                                .font(AppTheme.Font.caption2)
+                                .foregroundStyle(AppTheme.mutedText)
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(AppTheme.mutedText)
@@ -4098,6 +4105,8 @@ private struct PiAgentSessionGroupHeader: View {
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(section.isCollapsed ? "Expand" : "Collapse")
+            .accessibilityLabel("\(section.title), \(section.totalCount) sessions")
+            .accessibilityValue(section.isCollapsed ? "Collapsed" : "Expanded")
 
             if section.canCreateSession {
                 Button(action: onCreateSession) {
@@ -4315,7 +4324,8 @@ struct CodingAgentExpandedPanel: View {
                     activeLoopSessionIDs: activeLoopSessionIDs,
                     activityByID: visibleSessionActivityByID,
                     projectByPath: viewModel.projectByPath,
-                    compactSessionIDs: previousVisibleSessionIDs,
+                    projectDiscoveryComplete: viewModel.hasCompletedInitialProjectDiscovery,
+                    compactSessionIDs: [],
                     scrollRequestID: sessionScrollRequest,
                     scrollRequest: $sessionScrollRequest,
                     selection: $selectedSessionIDs,
@@ -4390,6 +4400,10 @@ struct CodingAgentExpandedPanel: View {
         .onChange(of: store.sessionListRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: sessionSearchText) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.appSettings.piAgentSessionViewMode) { _, _ in
+            cachedSections = []
+            rebuildVisibleSessionsDeferredIfNeeded()
+        }
         .onChange(of: store.uiRequestsBySessionID) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: store.subagentRunsRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: store.loopRunsRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
@@ -4467,6 +4481,19 @@ struct CodingAgentExpandedPanel: View {
                 .contentShape(Rectangle())
                 .onHover { isHoveringPreviousSessionsDeleteButton = $0 }
             }
+            Menu {
+                Button { viewModel.setPiAgentSessionViewMode(.recent) } label: {
+                    Label("Recent activity", systemImage: viewModel.appSettings.piAgentSessionViewMode == .recent ? "checkmark" : "clock")
+                }
+                Button { viewModel.setPiAgentSessionViewMode(.project) } label: {
+                    Label("By project", systemImage: viewModel.appSettings.piAgentSessionViewMode == .project ? "checkmark" : "folder")
+                }
+            } label: {
+                Label("Session view", systemImage: "line.3.horizontal.decrease")
+            }
+            .menuStyle(.borderlessButton)
+            .labelStyle(.iconOnly)
+            .help("Choose session view")
             CodingAgentNewSessionControls(viewModel: viewModel)
         }
     }
@@ -4492,7 +4519,7 @@ struct CodingAgentExpandedPanel: View {
     private var visibleSessions: [PiAgentSessionRecord] { visibleSections.flatMap(\.items) }
 
     private var richVisibleSessions: [PiAgentSessionRecord] {
-        visibleSections.filter { $0.style == .project }.flatMap(\.items)
+        visibleSections.flatMap(\.items)
     }
 
     private var previousVisibleSessionIDs: Set<UUID> {
@@ -4627,44 +4654,36 @@ struct CodingAgentExpandedPanel: View {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let partition = sessionPartition(from: scoped)
 
-        // This permanently represents the former focused-filter result, which
-        // was intentionally uncapped: every focused session remains visible in
-        // its project group.
-        var sections = PiAgentSessionGrouping.sections(
-            from: partition.focused,
-            projectByPath: viewModel.projectByPath,
-            projectDiscoveryComplete: viewModel.hasCompletedInitialProjectDiscovery,
-            expandedProjectIDs: viewModel.expandedProjects,
-            collapsedProjectIDs: viewModel.collapsedProjects,
-            capPreviews: false,
-            isWorking: { viewModel.piAgentSessionIsWorking($0) },
-            selectedSessionID: store.selectedSession?.id,
-            exactSort: true,
-            touchedThisRunSessionIDs: viewModel.piAgentSessionsTouchedThisRunIDs
-        )
-        if !partition.previous.isEmpty {
-            let previousSplit = PiAgentSessionGrouping.previousSessionsSplit(
-                sessions: partition.previous,
-                visibleLimit: query.isEmpty && !viewModel.showPiAgentAttentionOnly ? previousSessionsVisibleLimit : nil,
-                selectedSessionID: store.selectedSession?.id
+        let all = partition.focused + partition.previous
+        if viewModel.appSettings.piAgentSessionViewMode == .project {
+            return PiAgentSessionGrouping.sections(
+                from: all,
+                projectByPath: viewModel.projectByPath,
+                projectDiscoveryComplete: viewModel.hasCompletedInitialProjectDiscovery,
+                expandedProjectIDs: viewModel.expandedProjects,
+                collapsedProjectIDs: viewModel.collapsedProjects,
+                capPreviews: query.isEmpty && !viewModel.showPiAgentAttentionOnly,
+                isWorking: { viewModel.piAgentSessionIsWorking($0) },
+                selectedSessionID: store.selectedSession?.id,
+                exactSort: true,
+                touchedThisRunSessionIDs: viewModel.piAgentSessionsTouchedThisRunIDs.union(partition.focused.map(\.id))
             )
-            sections.append(PiAgentSessionListSection(
-                id: PiAgentSessionGrouping.previousSessionsSectionID,
-                title: "Previous Sessions",
-                subtitle: nil,
-                iconFileURL: nil,
-                fallbackSymbolName: "clock",
-                assetName: nil,
-                items: previousSplit.preview,
-                hiddenCount: previousSplit.hidden.count,
-                isShowMoreActive: false,
-                isCollapsed: false,
-                totalCount: previousSplit.all.count,
-                style: .previous,
-                isProjectGroup: false
-            ))
         }
-        return sections
+        guard !all.isEmpty else { return [] }
+        let split = PiAgentSessionGrouping.previousSessionsSplit(
+            sessions: all,
+            visibleLimit: query.isEmpty && !viewModel.showPiAgentAttentionOnly ? previousSessionsVisibleLimit : nil,
+            selectedSessionID: store.selectedSession?.id,
+            alwaysVisibleIDs: Set(partition.focused.map(\.id))
+        )
+        return [PiAgentSessionListSection(
+            id: PiAgentSessionGrouping.previousSessionsSectionID,
+            title: "Recent Sessions", subtitle: nil, iconFileURL: nil,
+            fallbackSymbolName: "clock", assetName: nil,
+            items: split.preview, hiddenCount: split.hidden.count,
+            isShowMoreActive: false, isCollapsed: false,
+            totalCount: split.all.count, style: .previous, isProjectGroup: false
+        )]
     }
 
     private func showMorePreviousSessions() {

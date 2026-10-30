@@ -46,14 +46,15 @@ enum PiAgentSessionGrouping {
     static func previousSessionsSplit(
         sessions: [PiAgentSessionRecord],
         visibleLimit: Int?,
-        selectedSessionID: UUID?
+        selectedSessionID: UUID?,
+        alwaysVisibleIDs: Set<UUID> = []
     ) -> PiAgentSessionPreviewSplit {
-        let sorted = sessions.sorted { PiAgentSessionRecord.sessionListPrecedesExact($0, $1) }
+        let sorted = sessions.sorted { sessionListPrecedes($0, $1, exactSort: true) }
         guard let visibleLimit else {
             return PiAgentSessionPreviewSplit(all: sorted, preview: sorted, hidden: [])
         }
 
-        var visibleIDs = Set(sorted.prefix(max(0, visibleLimit)).map(\.id))
+        var visibleIDs = Set(sorted.prefix(max(0, visibleLimit)).map(\.id)).union(alwaysVisibleIDs)
         if let selectedSessionID, sorted.contains(where: { $0.id == selectedSessionID }) {
             visibleIDs.insert(selectedSessionID)
         }
@@ -227,7 +228,7 @@ enum PiAgentSessionGrouping {
             projectSections.append(makeSection(
                 id: path,
                 title: project.gitHubRemote?.repo ?? project.name,
-                subtitle: project.gitHubRemote?.owner,
+                subtitle: path,
                 iconFileURL: project.iconFileURL,
                 fallbackSymbolName: project.fallbackSymbolName,
                 assetName: project.projectType.assetName,
@@ -278,7 +279,7 @@ enum PiAgentSessionGrouping {
         if !noProjectSessions.isEmpty {
             projectSections.append(makeSection(
                 id: noProjectSectionID,
-                title: PiAgentSessionRecord.noProjectDisplayName,
+                title: "Independent Sessions",
                 subtitle: nil,
                 iconFileURL: nil,
                 fallbackSymbolName: "bubble.left.and.bubble.right",
@@ -322,7 +323,7 @@ enum PiAgentSessionGrouping {
         if !orphans.isEmpty {
             projectSections.append(makeSection(
                 id: otherSectionID,
-                title: "Other",
+                title: "Project Not Found",
                 subtitle: nil,
                 iconFileURL: nil,
                 fallbackSymbolName: "folder",

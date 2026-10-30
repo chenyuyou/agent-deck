@@ -1131,6 +1131,15 @@ private struct AutomationsSettingsTab: View {
             }
 
             SettingsSection {
+                SettingsPickerRow(
+                    title: "Session view:",
+                    selection: sessionViewModeBinding,
+                    note: "Choose how sessions are organized. This does not change their project or working directory."
+                ) {
+                    Text("Recent activity").tag(PiAgentSessionViewMode.recent)
+                    Text("By project").tag(PiAgentSessionViewMode.project)
+                }
+
                 SettingsToggleRow(
                     title: "Worktree isolation:",
                     label: "Run each new session in its own git branch + worktree",
@@ -1225,6 +1234,13 @@ private struct AutomationsSettingsTab: View {
         Binding(
             get: { viewModel.appSettings.piAgentCommitMessageModelIdentifier ?? "" },
             set: { viewModel.setPiAgentCommitMessageModelIdentifier($0) }
+        )
+    }
+
+    private var sessionViewModeBinding: Binding<PiAgentSessionViewMode> {
+        Binding(
+            get: { viewModel.appSettings.piAgentSessionViewMode },
+            set: { viewModel.setPiAgentSessionViewMode($0) }
         )
     }
 

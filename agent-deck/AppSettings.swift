@@ -152,6 +152,10 @@ enum PiAgentExtensionLoadingMode: String, Codable, CaseIterable, Hashable, Ident
     }
 }
 
+enum PiAgentSessionViewMode: String, Codable, CaseIterable {
+    case recent, project
+}
+
 struct AppSettings: Codable, Hashable {
     var piAgentNotificationDelayMinutes: Int = 3
     var piAgentIdleParkingEnabled: Bool = true
@@ -190,6 +194,7 @@ struct AppSettings: Codable, Hashable {
     var piAgentGitAutomationEnabled: Bool = true
     var piAgentGitAutomationRequiresConfirmation: Bool = true
     var piAgentCommitMessageModelIdentifier: String?
+    var piAgentSessionViewMode: PiAgentSessionViewMode = .recent
     var piAgentSessionsUseWorktree: Bool = false
     var piAgentSessionsKeepWorktreeAfterMerge: Bool = true
     /// When on, the app silently updates Pi to the latest release once per
@@ -257,6 +262,7 @@ struct AppSettings: Codable, Hashable {
         case piAgentGitAutomationEnabled
         case piAgentGitAutomationRequiresConfirmation
         case piAgentCommitMessageModelIdentifier
+        case piAgentSessionViewMode
         case piAgentSessionsUseWorktree
         case piAgentSessionsKeepWorktreeAfterMerge
         case piAgentAutoUpdateEnabled
@@ -325,6 +331,7 @@ struct AppSettings: Codable, Hashable {
         piAgentGitAutomationEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationEnabled) ?? true
         piAgentGitAutomationRequiresConfirmation = try container.decodeIfPresent(Bool.self, forKey: .piAgentGitAutomationRequiresConfirmation) ?? true
         piAgentCommitMessageModelIdentifier = try container.decodeIfPresent(String.self, forKey: .piAgentCommitMessageModelIdentifier)
+        piAgentSessionViewMode = (try? container.decode(PiAgentSessionViewMode.self, forKey: .piAgentSessionViewMode)) ?? .recent
         piAgentSessionsUseWorktree = try container.decodeIfPresent(Bool.self, forKey: .piAgentSessionsUseWorktree) ?? false
         piAgentSessionsKeepWorktreeAfterMerge = try container.decodeIfPresent(Bool.self, forKey: .piAgentSessionsKeepWorktreeAfterMerge) ?? true
         piAgentAutoUpdateEnabled = try container.decodeIfPresent(Bool.self, forKey: .piAgentAutoUpdateEnabled) ?? false

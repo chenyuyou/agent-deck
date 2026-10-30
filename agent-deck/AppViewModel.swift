@@ -7021,6 +7021,11 @@ final class AppViewModel: NSObject {
         syncAppSettings()
     }
 
+    func setPiAgentSessionViewMode(_ mode: PiAgentSessionViewMode) {
+        guard appSettingsController.setPiAgentSessionViewMode(mode) else { return }
+        syncAppSettings()
+    }
+
     func setPiAgentSessionsUseWorktree(_ isEnabled: Bool) {
         guard appSettingsController.setPiAgentSessionsUseWorktree(isEnabled) else { return }
         syncAppSettings()

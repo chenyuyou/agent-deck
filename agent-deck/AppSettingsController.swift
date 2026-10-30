@@ -854,6 +854,14 @@ final class AppSettingsController {
     }
 
     @discardableResult
+    func setPiAgentSessionViewMode(_ mode: PiAgentSessionViewMode) -> Bool {
+        guard settings.piAgentSessionViewMode != mode else { return false }
+        settings.piAgentSessionViewMode = mode
+        persist()
+        return true
+    }
+
+    @discardableResult
     func setPiAgentSessionsUseWorktree(_ isEnabled: Bool) -> Bool {
         guard settings.piAgentSessionsUseWorktree != isEnabled else { return false }
         settings.piAgentSessionsUseWorktree = isEnabled

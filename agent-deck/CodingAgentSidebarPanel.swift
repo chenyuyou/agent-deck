@@ -379,6 +379,7 @@ private struct CodingAgentRecentList: View, Equatable {
 struct CodingAgentRecentRow: View, Equatable {
     let session: PiAgentSessionRecord
     let project: DiscoveredProject?
+    var projectDiscoveryComplete: Bool = false
     let isSelected: Bool
     let isRunning: Bool
     let hasUIRequest: Bool
@@ -393,6 +394,7 @@ struct CodingAgentRecentRow: View, Equatable {
     static func == (lhs: CodingAgentRecentRow, rhs: CodingAgentRecentRow) -> Bool {
         lhs.session == rhs.session
             && lhs.project == rhs.project
+            && lhs.projectDiscoveryComplete == rhs.projectDiscoveryComplete
             && lhs.isSelected == rhs.isSelected
             && lhs.isRunning == rhs.isRunning
             && lhs.hasUIRequest == rhs.hasUIRequest
@@ -432,6 +434,14 @@ struct CodingAgentRecentRow: View, Equatable {
                 .opacity(isSelected || hasUIRequest || hasActiveLoop || isRunning || session.needsAttention ? 1 : 0.58)
                 .layoutPriority(1)
 
+            Text(ownershipLabel)
+                .font(AppTheme.Font.caption)
+                .foregroundStyle(AppTheme.mutedText)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 120, alignment: .trailing)
+                .help(session.projectPath.isEmpty ? ownershipLabel : session.projectPath)
+
             Spacer(minLength: 6)
 
             ZStack(alignment: .trailing) {
@@ -450,7 +460,15 @@ struct CodingAgentRecentRow: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
-        .help(session.displayTitle)
+        .help("\(session.displayTitle) — \(ownershipLabel)")
+    }
+
+    var ownershipLabel: String {
+        if session.isAgentDeckBuilderSession { return session.projectNameForDisplay }
+        if session.isNoProject { return "Independent session" }
+        let name = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = name.isEmpty ? URL(fileURLWithPath: session.projectPath).lastPathComponent : name
+        return projectDiscoveryComplete && project == nil ? "Project not found: \(displayName)" : displayName
     }
 
     var iconImageURL: URL? {

@@ -524,7 +524,7 @@ final class PiAgentSessionGroupingTests: XCTestCase {
             collapsedProjectIDs: [],
             capPreviews: true, isWorking: { _ in false }, selectedSessionID: nil, now: now)
         XCTAssertEqual(sections.map(\.title), ["agent-deck", "claude-code-meter"])
-        XCTAssertEqual(sections.first?.subtitle, "a-streetcoder")
+        XCTAssertEqual(sections.first?.subtitle, "/p/deck")
         XCTAssertTrue(sections.allSatisfy { $0.isProjectGroup })
     }
 
@@ -540,7 +540,7 @@ final class PiAgentSessionGroupingTests: XCTestCase {
             capPreviews: true, isWorking: { _ in false }, selectedSessionID: nil, now: now)
         XCTAssertEqual(sections.count, 2)
         XCTAssertEqual(sections.last?.id, PiAgentSessionGrouping.otherSectionID)
-        XCTAssertEqual(sections.last?.title, "Other")
+        XCTAssertEqual(sections.last?.title, "Project Not Found")
         XCTAssertFalse(sections.last?.isProjectGroup ?? true)
     }
 
@@ -560,7 +560,7 @@ final class PiAgentSessionGroupingTests: XCTestCase {
             capPreviews: true, isWorking: { _ in false }, selectedSessionID: nil, now: now)
 
         XCTAssertEqual(sections.map(\.id), [deck.path, PiAgentSessionGrouping.noProjectSectionID, PiAgentSessionGrouping.otherSectionID])
-        XCTAssertEqual(sections[1].title, "General Chat")
+        XCTAssertEqual(sections[1].title, "Independent Sessions")
         XCTAssertEqual(sections[1].fallbackSymbolName, "bubble.left.and.bubble.right")
         XCTAssertFalse(sections[1].isProjectGroup)
         XCTAssertTrue(sections[1].canCreateSession)
@@ -736,6 +736,36 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         let next = PiAgentSessionGrouping.nextSelectionAfterDeletion(
             visibleSessions: sessions, deletedIDs: [sessions[1].id], selectedID: nil)
         XCTAssertNil(next)
+    }
+
+    func testRecentListKeepsPinnedAndActiveOlderSessionsVisible() throws {
+        let recent = try makeSession(title: "recent", updatedAt: now)
+        var pinned = try makeSession(title: "pinned", updatedAt: now.addingTimeInterval(-1000))
+        pinned.pinnedAt = now
+        let active = try makeSession(title: "active", updatedAt: now.addingTimeInterval(-2000))
+        let split = PiAgentSessionGrouping.previousSessionsSplit(
+            sessions: [recent, pinned, active], visibleLimit: 1,
+            selectedSessionID: nil, alwaysVisibleIDs: [active.id]
+        )
+        XCTAssertEqual(split.preview.map(\.id), [pinned.id, active.id])
+        XCTAssertEqual(split.hidden.map(\.id), [recent.id])
+    }
+
+    func testGroupedHistoryAndIndependentSessionsRemainSeparate() throws {
+        let path = "/tmp/project-a"
+        let first = try makeSession(title: "recent", updatedAt: now, projectPath: path)
+        let old = try makeSession(title: "old", updatedAt: now.addingTimeInterval(-10000), projectPath: path)
+        var independent = try makeSession(title: "independent", updatedAt: now, projectPath: "")
+        independent.kind = .project
+        let project = try makeProject(path: path, repo: "project-a", owner: "owner")
+        let sections = PiAgentSessionGrouping.sections(
+            from: [first, old, independent], projectByPath: [path: project],
+            expandedProjectIDs: [], collapsedProjectIDs: [], capPreviews: false,
+            isWorking: { _ in false }, selectedSessionID: nil, now: now
+        )
+        XCTAssertEqual(Set(sections.flatMap(\.items).map(\.id)), Set([first.id, old.id, independent.id]))
+        XCTAssertEqual(Set(sections.first(where: { $0.id == path })?.items.map(\.id) ?? []), Set([first.id, old.id]))
+        XCTAssertEqual(sections.first(where: { $0.id == PiAgentSessionGrouping.noProjectSectionID })?.items.map(\.id), [independent.id])
     }
 
     // MARK: - helpers
