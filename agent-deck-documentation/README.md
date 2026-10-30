@@ -4,6 +4,8 @@ This is the canonical reference set for how Agent Deck composes with the Pi CLI,
 
 In the session composer, Return sends the message once text input is complete. While an input method is composing text, Return and candidate navigation keys are handled by the input method first; confirming a candidate does not send the message.
 
+Local file links in coding-agent messages resolve relative paths against the session's working directory, including its worktree when present. Absolute file paths open directly with the system's default application.
+
 ## Concepts
 
 - [Pi runtime vs Agent Deck](concepts/pi-runtime-vs-agent-deck.md) — where Pi ends and the app begins.
