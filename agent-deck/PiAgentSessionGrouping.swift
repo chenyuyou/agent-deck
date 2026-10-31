@@ -194,7 +194,10 @@ enum PiAgentSessionGrouping {
         now: Date = Date(),
         options: PiAgentSessionGroupingOptions = .default,
         exactSort: Bool = false,
-        touchedThisRunSessionIDs: Set<UUID> = []
+        touchedThisRunSessionIDs: Set<UUID> = [],
+        emptyProjectPaths: Set<String> = [],
+        showEmptyIndependent: Bool = false,
+        preserveMissingProjects: Bool = false
     ) -> [PiAgentSessionListSection] {
         var byPath: [String: [PiAgentSessionRecord]] = [:]
         var pendingDiscoveryByPath: [String: [PiAgentSessionRecord]] = [:]
@@ -208,7 +211,7 @@ enum PiAgentSessionGrouping {
                 noProjectSessions.append(session)
             } else if projectByPath[session.projectPath] != nil {
                 byPath[session.projectPath, default: []].append(session)
-            } else if !projectDiscoveryComplete,
+            } else if (!projectDiscoveryComplete || preserveMissingProjects),
                       !session.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // The session index loads independently of project discovery. During
                 // that cold-start window a non-empty persisted project path is not an
@@ -218,6 +221,10 @@ enum PiAgentSessionGrouping {
             } else {
                 orphans.append(session)
             }
+        }
+
+        for path in emptyProjectPaths where projectByPath[path] != nil && byPath[path] == nil {
+            byPath[path] = []
         }
 
         var projectSections: [PiAgentSessionListSection] = []
@@ -252,7 +259,7 @@ enum PiAgentSessionGrouping {
             let title = repositoryParts.last
                 ?? representative.projectName.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
                 ?? URL(fileURLWithPath: path).lastPathComponent
-            let subtitle = repositoryParts.count == 2 ? repositoryParts[0] : nil
+            let subtitle = projectDiscoveryComplete ? "Project not found · \(path)" : (repositoryParts.count == 2 ? repositoryParts[0] : nil)
             projectSections.append(makeSection(
                 id: path,
                 title: title,
@@ -276,7 +283,7 @@ enum PiAgentSessionGrouping {
 
         projectSections.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
 
-        if !noProjectSessions.isEmpty {
+        if !noProjectSessions.isEmpty || showEmptyIndependent {
             projectSections.append(makeSection(
                 id: noProjectSectionID,
                 title: "Independent Sessions",

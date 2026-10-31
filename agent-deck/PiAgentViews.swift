@@ -3962,6 +3962,7 @@ private struct SessionListContent: View, Equatable {
                     : (shouldShowHeader(for: section)
                         ? AnyView(PiAgentSessionGroupHeader(
                             section: section,
+                            projectAvailable: projectByPath[section.id] != nil,
                             onToggleCollapse: { onToggleCollapse(section.id) },
                             onCreateSession: { onCreateSessionForProject(section.id) }
                         ))
@@ -4060,6 +4061,7 @@ private struct SessionListContent: View, Equatable {
 /// `AppListSection.header`, so it inherits `AppList`'s section spacing.
 private struct PiAgentSessionGroupHeader: View {
     let section: PiAgentSessionListSection
+    let projectAvailable: Bool
     let onToggleCollapse: () -> Void
     let onCreateSession: () -> Void
 
@@ -4074,6 +4076,7 @@ private struct PiAgentSessionGroupHeader: View {
                     ProjectIconView(imageURL: section.iconFileURL, symbolName: section.fallbackSymbolName, size: 30, assetName: section.assetName)
                 }
                 .buttonStyle(.plain)
+                .disabled(!projectAvailable)
                 .help("Open project folder in Finder: \(section.id)")
                 .accessibilityLabel("Open \(section.title) folder in Finder")
             } else {
@@ -4124,6 +4127,7 @@ private struct PiAgentSessionGroupHeader: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .disabled(section.isProjectGroup && !projectAvailable)
                 .frame(width: 30, height: 30, alignment: .center)
                 .help(section.id == PiAgentSessionGrouping.noProjectSectionID ? "New General Chat" : (section.id == PiAgentSessionGrouping.agentDeckBuilderSectionID ? "New Agent Deck Builder" : "New session in \(section.title)"))
                 .accessibilityLabel(section.id == PiAgentSessionGrouping.noProjectSectionID ? "New General Chat" : (section.id == PiAgentSessionGrouping.agentDeckBuilderSectionID ? "New Agent Deck Builder" : "New session in \(section.title)"))
@@ -4314,7 +4318,7 @@ struct CodingAgentExpandedPanel: View {
                 // schedulePostExpandWork rebuild lands, this branch disappears.
                 Color.clear
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if !hasAnyScopedSessions {
+            } else if !hasAnyScopedSessions && visibleSections.isEmpty {
                 AppEmptyState("No sessions yet", systemImage: "square.and.pencil", description: emptySessionsMessage, layout: .fill)
             } else if visibleSections.isEmpty {
                 AppEmptyState("No sessions found", systemImage: "magnifyingglass", description: "Try another search.", layout: .fill)
@@ -4500,6 +4504,14 @@ struct CodingAgentExpandedPanel: View {
             .menuStyle(.borderlessButton)
             .labelStyle(.iconOnly)
             .help("Choose session view")
+            Button {
+                viewModel.chooseProjectRoot()
+            } label: {
+                Image(systemName: "folder.badge.plus")
+            }
+            .buttonStyle(.plain)
+            .help("Add an existing project folder")
+            .accessibilityLabel("Add an existing project folder")
             CodingAgentNewSessionControls(viewModel: viewModel)
         }
     }
@@ -4672,7 +4684,12 @@ struct CodingAgentExpandedPanel: View {
                 isWorking: { viewModel.piAgentSessionIsWorking($0) },
                 selectedSessionID: store.selectedSession?.id,
                 exactSort: true,
-                touchedThisRunSessionIDs: viewModel.piAgentSessionsTouchedThisRunIDs.union(partition.focused.map(\.id))
+                touchedThisRunSessionIDs: viewModel.piAgentSessionsTouchedThisRunIDs.union(partition.focused.map(\.id)),
+                emptyProjectPaths: viewModel.showPiAgentAttentionOnly ? [] : Set(viewModel.enabledProjects.filter { project in
+                    query.isEmpty || project.name.localizedCaseInsensitiveContains(query) || project.path.localizedCaseInsensitiveContains(query)
+                }.map(\.path)),
+                showEmptyIndependent: query.isEmpty && !viewModel.showPiAgentAttentionOnly,
+                preserveMissingProjects: true
             )
         }
         guard !all.isEmpty else { return [] }

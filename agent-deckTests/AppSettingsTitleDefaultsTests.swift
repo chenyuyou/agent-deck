@@ -7,8 +7,8 @@ final class AppSettingsTitleDefaultsTests: XCTestCase {
 
     func testSessionViewPreferenceRoundTripsAndFallsBack() throws {
         let decoder = JSONDecoder()
-        XCTAssertEqual(try decoder.decode(AppSettings.self, from: Data("{}".utf8)).piAgentSessionViewMode, .recent)
-        XCTAssertEqual(try decoder.decode(AppSettings.self, from: Data(#"{"piAgentSessionViewMode":"future"}"#.utf8)).piAgentSessionViewMode, .recent)
+        XCTAssertEqual(try decoder.decode(AppSettings.self, from: Data("{}".utf8)).piAgentSessionViewMode, .project)
+        XCTAssertEqual(try decoder.decode(AppSettings.self, from: Data(#"{"piAgentSessionViewMode":"future"}"#.utf8)).piAgentSessionViewMode, .project)
         var settings = AppSettings()
         settings.piAgentSessionViewMode = .project
         let restored = try decoder.decode(AppSettings.self, from: JSONEncoder().encode(settings))

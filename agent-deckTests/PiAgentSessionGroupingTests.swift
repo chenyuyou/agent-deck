@@ -4,6 +4,31 @@ import XCTest
 @MainActor
 final class PiAgentSessionGroupingTests: XCTestCase {
 
+    func testWorkspaceShowsEmptyProjectsAndIndependentGroup() throws {
+        let project = try makeProject(path: "/p/empty", repo: "empty", owner: "owner")
+        let sections = PiAgentSessionGrouping.sections(
+            from: [], projectByPath: [project.path: project], expandedProjectIDs: [],
+            collapsedProjectIDs: [], capPreviews: true, isWorking: { _ in false },
+            selectedSessionID: nil, emptyProjectPaths: [project.path], showEmptyIndependent: true
+        )
+        XCTAssertEqual(sections.map(\.id), [project.path, PiAgentSessionGrouping.noProjectSectionID])
+        XCTAssertEqual(sections.first?.totalCount, 0)
+        XCTAssertTrue(sections.allSatisfy(\.canCreateSession))
+    }
+
+    func testWorkspaceKeepsMissingProjectsSeparate() throws {
+        let first = try makeSession(title: "first", updatedAt: now, projectPath: "/missing/first")
+        let second = try makeSession(title: "second", updatedAt: now, projectPath: "/missing/second")
+        let sections = PiAgentSessionGrouping.sections(
+            from: [first, second], projectByPath: [:], expandedProjectIDs: [],
+            collapsedProjectIDs: [], capPreviews: true, isWorking: { _ in false },
+            selectedSessionID: nil, preserveMissingProjects: true
+        )
+        XCTAssertEqual(Set(sections.map(\.id)), ["/missing/first", "/missing/second"])
+        XCTAssertTrue(sections.allSatisfy { $0.subtitle?.contains("Project not found") == true })
+        XCTAssertEqual(Set(sections.flatMap(\.items).map(\.id)), [first.id, second.id])
+    }
+
     /// Fixed reference instant so recency windows are deterministic.
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 

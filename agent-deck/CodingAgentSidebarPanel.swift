@@ -48,7 +48,7 @@ struct CodingAgentPanelHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            Button("Sessions", action: onToggle)
+            Button("Projects & Sessions", action: onToggle)
                 .buttonStyle(.plain)
                 .font(AppTheme.Font.headline)
                 .foregroundStyle(.primary)
