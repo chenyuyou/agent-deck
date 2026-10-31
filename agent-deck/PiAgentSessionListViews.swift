@@ -68,9 +68,7 @@ struct PiAgentAddSessionMenuButton: View {
             style: .soft,
             tint: isEnabled ? AppTheme.brandAccent : AppTheme.mutedText,
             size: 30,
-            help: projects.isEmpty
-                ? "New General Chat Pi Agent session"
-                : "Choose a project or General Chat for the new Pi Agent session",
+            help: "Choose a project, General Chat, or Agent Deck Builder for the new session",
             action: primaryAction
         ) {
             Image(systemName: "plus")
@@ -97,11 +95,7 @@ struct PiAgentAddSessionMenuButton: View {
     }
 
     private func primaryAction() {
-        if projects.isEmpty {
-            action()
-        } else {
-            isPresented.toggle()
-        }
+        isPresented.toggle()
     }
 
     private var orderedProjects: [DiscoveredProject] {

@@ -4512,7 +4512,9 @@ struct CodingAgentExpandedPanel: View {
             .buttonStyle(.plain)
             .help("Add an existing project folder")
             .accessibilityLabel("Add an existing project folder")
-            CodingAgentNewSessionControls(viewModel: viewModel)
+            if viewModel.appSettings.piAgentSessionViewMode == .recent {
+                CodingAgentNewSessionControls(viewModel: viewModel)
+            }
         }
     }
 
@@ -4689,6 +4691,7 @@ struct CodingAgentExpandedPanel: View {
                     query.isEmpty || project.name.localizedCaseInsensitiveContains(query) || project.path.localizedCaseInsensitiveContains(query)
                 }.map(\.path)),
                 showEmptyIndependent: query.isEmpty && !viewModel.showPiAgentAttentionOnly,
+                showEmptyBuilder: query.isEmpty && !viewModel.showPiAgentAttentionOnly,
                 preserveMissingProjects: true
             )
         }

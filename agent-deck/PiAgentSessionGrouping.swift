@@ -197,6 +197,7 @@ enum PiAgentSessionGrouping {
         touchedThisRunSessionIDs: Set<UUID> = [],
         emptyProjectPaths: Set<String> = [],
         showEmptyIndependent: Bool = false,
+        showEmptyBuilder: Bool = false,
         preserveMissingProjects: Bool = false
     ) -> [PiAgentSessionListSection] {
         var byPath: [String: [PiAgentSessionRecord]] = [:]
@@ -305,7 +306,7 @@ enum PiAgentSessionGrouping {
             ))
         }
 
-        if !agentDeckBuilderSessions.isEmpty {
+        if !agentDeckBuilderSessions.isEmpty || showEmptyBuilder {
             projectSections.append(makeSection(
                 id: agentDeckBuilderSectionID,
                 title: PiAgentSessionRecord.agentDeckBuilderDisplayName,

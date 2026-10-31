@@ -9,9 +9,10 @@ final class PiAgentSessionGroupingTests: XCTestCase {
         let sections = PiAgentSessionGrouping.sections(
             from: [], projectByPath: [project.path: project], expandedProjectIDs: [],
             collapsedProjectIDs: [], capPreviews: true, isWorking: { _ in false },
-            selectedSessionID: nil, emptyProjectPaths: [project.path], showEmptyIndependent: true
+            selectedSessionID: nil, emptyProjectPaths: [project.path], showEmptyIndependent: true,
+            showEmptyBuilder: true
         )
-        XCTAssertEqual(sections.map(\.id), [project.path, PiAgentSessionGrouping.noProjectSectionID])
+        XCTAssertEqual(sections.map(\.id), [project.path, PiAgentSessionGrouping.noProjectSectionID, PiAgentSessionGrouping.agentDeckBuilderSectionID])
         XCTAssertEqual(sections.first?.totalCount, 0)
         XCTAssertTrue(sections.allSatisfy(\.canCreateSession))
     }
