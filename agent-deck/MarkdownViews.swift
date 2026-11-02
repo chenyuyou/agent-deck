@@ -542,9 +542,8 @@ final class NativeMarkdownTextContainer: NSView {
             guard index < document.blocks.count, offset + index < stackView.arrangedSubviews.count else { continue }
             let block = document.blocks[index]
             let existing = stackView.arrangedSubviews[offset + index]
-            if case .table = block.kind {
-                stackView.insertArrangedSubview(Self.view(for: block), at: offset + index)
-                existing.removeFromSuperview()
+            if case .table = block.kind, let table = existing as? MarkdownTableView {
+                table.refreshMath(formulae: Set(formulae), render: Self.tableCellAttributedString)
             } else if let textView = Self.firstTextView(in: existing) {
                 Self.updateTextView(textView, with: block.kind)
             }
@@ -1231,39 +1230,36 @@ final class NativeMarkdownTextContainer: NSView {
     /// so cells stacked into one tall column — manual layout
     /// is what actually wraps cells into proper columns.
     private static func tableBlock(_ table: MarkdownTable) -> NSView {
-        let bodyFont = NativeMarkdownFont.body
-        let headerFont = NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
-
-        func cellAttr(_ text: String, isHeader: Bool, alignment: MarkdownTableAlignment) -> NSAttributedString {
-            // Header cells are bold and carry the theme's heading tint (consistent
-            // with the rest of the markdown highlighting); body cells use normal text.
-            let base = attributedString(
-                text,
-                font: isHeader ? headerFont : bodyFont,
-                color: isHeader ? MarkdownSemanticStyler.headingColor : .labelColor,
-                parseInlineMarkdown: true
-            )
-            let mutable = NSMutableAttributedString(attributedString: base)
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineBreakMode = .byWordWrapping
-            paragraph.lineSpacing = 2
-            paragraph.alignment = alignment == .center ? .center : (alignment == .trailing ? .right : .natural)
-            mutable.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: mutable.length))
-            return mutable
-        }
-
         let columnCount = max(1, table.columnCount)
         let header = (0..<columnCount).map { column in
-            cellAttr(column < table.header.count ? table.header[column] : "", isHeader: true, alignment: table.alignment(column))
+            tableCellAttributedString(column < table.header.count ? table.header[column] : "", true, table.alignment(column))
         }
         let rows = table.rows.map { row in
             (0..<columnCount).map { column in
-                cellAttr(column < row.count ? row[column] : "", isHeader: false, alignment: table.alignment(column))
+                tableCellAttributedString(column < row.count ? row[column] : "", false, table.alignment(column))
             }
         }
         let view = MarkdownTableView()
-        view.configure(headerCells: header, bodyRows: rows)
+        view.configure(headerCells: header, bodyRows: rows, source: table)
         return view
+    }
+
+    private static func tableCellAttributedString(_ text: String, _ isHeader: Bool, _ alignment: MarkdownTableAlignment) -> NSAttributedString {
+        let bodyFont = NativeMarkdownFont.body
+        let headerFont = NSFontManager.shared.convert(bodyFont, toHaveTrait: .boldFontMask)
+        let base = attributedString(
+            text,
+            font: isHeader ? headerFont : bodyFont,
+            color: isHeader ? MarkdownSemanticStyler.headingColor : .labelColor,
+            parseInlineMarkdown: true
+        )
+        let mutable = NSMutableAttributedString(attributedString: base)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineSpacing = 2
+        paragraph.alignment = alignment == .center ? .center : (alignment == .trailing ? .right : .natural)
+        mutable.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: mutable.length))
+        return mutable
     }
 
     // Gap between the marker column and the text column, in points.
@@ -1571,6 +1567,9 @@ final class NativeMarkdownTextContainer: NSView {
 /// auto-sizing cells, collapsing every cell into one tall column.
 private final class MarkdownTableView: NSView {
     private var cellViews: [[NSTextView]] = []   // [row][col]; row 0 is the header
+    private var source: MarkdownTable?
+    private var formulaCells: [String: Set<CellPosition>] = [:]
+    private struct CellPosition: Hashable { let row: Int; let column: Int }
     private let separator = NSBox()
     private var heightConstraint: NSLayoutConstraint!
     /// Bands (full-width row rects) for the zebra-striped body rows, filled in `draw`.
@@ -1592,9 +1591,18 @@ private final class MarkdownTableView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(headerCells: [NSAttributedString], bodyRows: [[NSAttributedString]]) {
+    func configure(headerCells: [NSAttributedString], bodyRows: [[NSAttributedString]], source: MarkdownTable) {
         cellViews.forEach { $0.forEach { $0.removeFromSuperview() } }
         cellViews.removeAll()
+        self.source = source
+        formulaCells.removeAll(keepingCapacity: true)
+        for (row, texts) in ([source.header] + source.rows).enumerated() {
+            for (column, text) in texts.enumerated() {
+                for formula in MarkdownMath.formulaSources(in: text) {
+                    formulaCells[formula, default: []].insert(CellPosition(row: row, column: column))
+                }
+            }
+        }
         let columnCount = max(headerCells.count, bodyRows.map(\.count).max() ?? 0)
         guard columnCount > 0 else { heightConstraint.constant = 1; return }
 
@@ -1607,6 +1615,22 @@ private final class MarkdownTableView: NSView {
             cells.forEach { addSubview($0) }
         }
         needsLayout = true
+    }
+
+    func refreshMath(formulae: Set<String>, render: (String, Bool, MarkdownTableAlignment) -> NSAttributedString) {
+        guard let source else { return }
+        let positions = formulae.reduce(into: Set<CellPosition>()) { result, formula in
+            if let cells = formulaCells[formula] { result.formUnion(cells) }
+        }
+        for position in positions {
+            guard cellViews.indices.contains(position.row), cellViews[position.row].indices.contains(position.column) else { continue }
+            let texts = position.row == 0 ? source.header : source.rows[position.row - 1]
+            guard texts.indices.contains(position.column) else { continue }
+            cellViews[position.row][position.column].textStorage?.setAttributedString(
+                render(texts[position.column], position.row == 0, source.alignment(position.column))
+            )
+        }
+        if !positions.isEmpty { needsLayout = true; invalidateIntrinsicContentSize() }
     }
 
     private static func makeCell(_ attr: NSAttributedString) -> NSTextView {

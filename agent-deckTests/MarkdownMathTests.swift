@@ -228,6 +228,27 @@ final class MarkdownMathTests: XCTestCase {
         XCTAssertNotNil(storage.attribute(.attachment, at: 0, effectiveRange: nil))
     }
 
+    func testMathJaxUpdateKeepsTableCellsAndOtherFormulas() async throws {
+        let latex = #"\bbox[red]{tableRefreshRegression}"#
+        let source = "| Formula | Other |\n| --- | --- |\n| $$\(latex)$$ | $x^2$ |"
+        let container = NativeMarkdownTextContainer(frame: .zero)
+        let applier = MarkdownSourceApplier()
+        defer { applier.cancel(); container.dismantle() }
+        applier.apply(source: source, to: container)
+        func textViews(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
+        }
+        let before = textViews(container)
+        XCTAssertEqual(before.count, 4)
+        MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
+        try await Task.sleep(for: .milliseconds(150))
+        let after = textViews(container)
+        XCTAssertEqual(after.count, before.count)
+        for (old, new) in zip(before, after) { XCTAssertTrue(old === new) }
+        let storage = try XCTUnwrap(after[2].textStorage)
+        XCTAssertNotNil(storage.attribute(.attachment, at: 0, effectiveRange: nil))
+    }
+
     func testStreamingAppendDoesNotRescanUnchangedBlocks() {
         let container = NativeMarkdownTextContainer(frame: .zero)
         let applier = MarkdownSourceApplier()
