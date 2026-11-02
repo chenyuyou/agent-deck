@@ -56,6 +56,11 @@ enum PiAgentThreadChild: Hashable, Identifiable {
     /// once here at thread-build time so the card never re-parses during render.
     case retry(PiAgentTranscriptEntry, ProviderRetryInfo)
 
+    var questionNavigationEntry: PiAgentTranscriptEntry? {
+        if case let .steering(entry) = self { return entry }
+        return nil
+    }
+
     var id: String {
         switch self {
         case .steering(let e): return "st-\(e.id.uuidString)"

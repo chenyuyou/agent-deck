@@ -3,6 +3,26 @@ import XCTest
 
 @MainActor
 final class QuestionRailScrollLandingTests: XCTestCase {
+    func testUserFollowUpsAndAnswersCanBeNavigationTargets() {
+        let sessionID = UUID()
+        let followUp = PiAgentTranscriptEntry(sessionID: sessionID, role: .user, title: "Steering", text: "Follow-up")
+        let answer = PiAgentTranscriptEntry(sessionID: sessionID, role: .user, title: "Ask User Response", text: "Answer")
+        let reply = PiAgentTranscriptEntry(sessionID: sessionID, role: .assistant, title: "Assistant", text: "Reply")
+        XCTAssertEqual(PiAgentThreadChild.steering(followUp).questionNavigationEntry?.id, followUp.id)
+        XCTAssertEqual(PiAgentThreadChild.steering(answer).questionNavigationEntry?.id, answer.id)
+        XCTAssertNil(PiAgentThreadChild.assistant(reply).questionNavigationEntry)
+    }
+
+    func testQuestionNavigationTargetsSurviveThreadGroupingForAnswerOnlyTranscript() {
+        let sessionID = UUID()
+        let entries = (0..<3).map { index in
+            PiAgentTranscriptEntry(sessionID: sessionID, role: .user, title: "Ask User Response", text: "Message \(index)")
+        }
+        let threads = PiAgentTranscriptThread.make(from: entries)
+        let targets = threads.flatMap(\.children).compactMap(\.questionNavigationEntry)
+        XCTAssertEqual(targets.map(\.id), entries.map(\.id))
+        XCTAssertTrue(QuestionRailVisibilityPolicy().shouldShow(questionCount: targets.count, evenStackedHeight: 100, railHeight: 100))
+    }
     func testQuestionRailShowsScrollableOverflowWhenStackDoesNotFit() {
         let policy = QuestionRailVisibilityPolicy()
         XCTAssertTrue(policy.shouldShow(questionCount: 18, evenStackedHeight: 520, railHeight: 328))

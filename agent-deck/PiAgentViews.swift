@@ -2334,6 +2334,9 @@ private struct PiAgentAppKitTranscriptView: NSViewRepresentable {
                     // reconfigure those whose item revision has shifted.
                     self.reconfigureChangedVisibleCells()
                     self.restoreScrollAnchorIfNeeded(anchor)
+                    // The diffable snapshot may finish after apply() returns; its
+                    // rows are authoritative for question navigation only now.
+                    self.updateQuestionRail()
                     // Rows were added/removed (or the session switched) — content
                     // geometry genuinely moved, so passive follow may act on it.
                     self.handleScrollAfterUpdate(isSessionSwitch: isSessionSwitch, explicitScroll: explicitScroll, wasFollowing: wasFollowing, contentAdvanced: true)
@@ -6212,6 +6215,7 @@ struct PiAgentScreen: View {
                             baseRevision: revision,
                             estimatedContentHeight: { Self.estimatedChildHeight(child, width: $0, toolGroupModel: toolGroupEstimateModel) },
                             threadID: item.id,
+                            questionNavigationTitle: child.questionNavigationEntry.map(Self.questionNavigationTitle(for:)),
                             isThreadQuestion: false
                         ))
                     }
