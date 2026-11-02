@@ -422,7 +422,6 @@ final class MarkdownSourceApplier {
 
     func apply(source: String, to view: NativeMarkdownTextContainer) {
         let displaySource = StreamingMarkdownBalancer.balance(source)
-        view.mathSource = displaySource
 
         // Synchronous fast paths — no wobble, height stays exact this frame:
         //  • cache hit (re-render, scroll-back, unchanged text), or
@@ -466,9 +465,11 @@ final class NativeMarkdownTextContainer: NSView {
     var openLocalLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
     private let stackView = NSStackView()
     private var lastDocument: CachedMarkdownDocument?
-    fileprivate var mathSource = ""
+    private var formulaBlockIndices: [String: Set<Int>] = [:]
+    private var formulaSourcesByBlock: [[String]] = []
     private var lastStyleRevision = -1
 #if DEBUG
+    static private(set) var formulaIndexScanCount = 0
     /// Summary of the most recent `configure(document:)` on ANY container, read
     /// synchronously by the cell-vend profiler right after it triggers a build so
     /// the hitch line can say WHY the row was costly (a full teardown+rebuild of N
@@ -531,9 +532,31 @@ final class NativeMarkdownTextContainer: NSView {
 
     @objc private func mathJaxDidUpdate(_ notification: Notification) {
         guard !isDismantled, let formulae = notification.object as? [String],
-              formulae.contains(where: { mathSource.contains($0) }), let document = lastDocument else { return }
-        lastDocument = nil
-        configure(document: document)
+              let document = lastDocument else { return }
+        let offset = document.frontmatter == nil ? 0 : 1
+        let indices = formulae.reduce(into: Set<Int>()) { result, formula in
+            if let matches = formulaBlockIndices[formula] { result.formUnion(matches) }
+        }
+        var updated = false
+        for index in indices.sorted() {
+            guard index < document.blocks.count, offset + index < stackView.arrangedSubviews.count else { continue }
+            let block = document.blocks[index]
+            let existing = stackView.arrangedSubviews[offset + index]
+            if case .table = block.kind {
+                stackView.insertArrangedSubview(Self.view(for: block), at: offset + index)
+                existing.removeFromSuperview()
+            } else if let textView = Self.firstTextView(in: existing) {
+                Self.updateTextView(textView, with: block.kind)
+            }
+            updated = true
+        }
+        if updated {
+            heightCache = nil
+            lastFullLayoutWidth = nil
+            settleMeasurementsRemaining = Self.settleMeasurementBudget
+            invalidateIntrinsicContentSize()
+            scheduleHeightMeasurement()
+        }
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
@@ -666,6 +689,32 @@ final class NativeMarkdownTextContainer: NSView {
         let previous = lastDocument
         lastDocument = document
         lastStyleRevision = styleRevision
+        if previous != document {
+            let oldSources = formulaSourcesByBlock
+            formulaSourcesByBlock = []
+            formulaBlockIndices.removeAll(keepingCapacity: true)
+            for (index, block) in document.blocks.enumerated() {
+                let formulas: [String]
+                if let previous, index < previous.blocks.count, index < oldSources.count, previous.blocks[index] == block {
+                    formulas = oldSources[index]
+                } else {
+#if DEBUG
+                    Self.formulaIndexScanCount += 1
+#endif
+                    let texts: [String]
+                    switch block.kind {
+                    case let .table(table): texts = table.header + table.rows.flatMap { $0 }
+                    case .code: texts = []
+                    default: texts = [Self.bodyText(from: block.kind)]
+                    }
+                    formulas = texts.flatMap { MarkdownMath.formulaSources(in: $0) }
+                }
+                formulaSourcesByBlock.append(formulas)
+                for formula in formulas {
+                    formulaBlockIndices[formula, default: []].insert(index)
+                }
+            }
+        }
         // The document changed (the unchanged case returned at the guard above),
         // so any cached height is now stale. `measureHeight(forWidth:)` repopulates,
         // and the settle loop re-measures fresh for a few runloops until the new
@@ -1417,17 +1466,38 @@ final class NativeMarkdownTextContainer: NSView {
     // theme revision so toggling highlighting / switching theme never serves stale colors.
     private static var attributedStringCache: [String: NSAttributedString] = [:]
     private static var attributedStringCacheOrder: [String] = []
+    private static var attributedCacheKeysByFormula: [String: Set<String>] = [:]
+    private static var attributedCacheFormulasByKey: [String: Set<String>] = [:]
     private static let attributedStringCacheLimit = 512
 
+    private static func removeAttributedCacheEntry(_ key: String) {
+        attributedStringCache.removeValue(forKey: key)
+        for formula in attributedCacheFormulasByKey.removeValue(forKey: key) ?? [] {
+            attributedCacheKeysByFormula[formula]?.remove(key)
+            if attributedCacheKeysByFormula[formula]?.isEmpty == true { attributedCacheKeysByFormula.removeValue(forKey: formula) }
+        }
+    }
+
+    static func invalidateMathCache(for formulas: Set<String>) {
+        let keys = formulas.reduce(into: Set<String>()) { $0.formUnion(attributedCacheKeysByFormula[$1] ?? []) }
+        for key in keys { removeAttributedCacheEntry(key) }
+        if !keys.isEmpty { attributedStringCacheOrder.removeAll { keys.contains($0) } }
+    }
+
     private static func attributedString(_ source: String, font: NSFont, color: NSColor, parseInlineMarkdown: Bool) -> NSAttributedString {
-        let key = "\(ThemeManager.shared.revision)|\(MarkdownMath.mathJaxRevision)|\(parseInlineMarkdown ? 1 : 0)|\(font.fontName):\(font.pointSize)|\(color.description)|\(source)"
+        let key = "\(ThemeManager.shared.revision)|\(parseInlineMarkdown ? 1 : 0)|\(font.fontName):\(font.pointSize)|\(color.description)|\(source)"
         if let cached = attributedStringCache[key] { return cached }
         let result = buildAttributedString(source, font: font, color: color, parseInlineMarkdown: parseInlineMarkdown)
         attributedStringCache[key] = result
+        let formulas = parseInlineMarkdown ? Set(MarkdownMath.formulaSources(in: source)) : []
+        if !formulas.isEmpty {
+            attributedCacheFormulasByKey[key] = formulas
+            for formula in formulas { attributedCacheKeysByFormula[formula, default: []].insert(key) }
+        }
         attributedStringCacheOrder.append(key)
         if attributedStringCacheOrder.count > attributedStringCacheLimit {
             let evict = attributedStringCacheOrder.removeFirst()
-            attributedStringCache.removeValue(forKey: evict)
+            removeAttributedCacheEntry(evict)
         }
         return result
     }
@@ -2776,20 +2846,41 @@ enum TranscriptAttributedStringBuilder {
 }
 
 @MainActor
-private enum TranscriptAttributedStringCache {
+enum TranscriptAttributedStringCache {
     private static var cache: [String: [TranscriptRenderedBlock]] = [:]
     private static var order: [String] = []
+    private static var keysByFormula: [String: Set<String>] = [:]
+    private static var formulasByKey: [String: Set<String>] = [:]
     private static let limit = 1_024
+
+    private static func remove(_ key: String) {
+        cache.removeValue(forKey: key)
+        for formula in formulasByKey.removeValue(forKey: key) ?? [] {
+            keysByFormula[formula]?.remove(key)
+            if keysByFormula[formula]?.isEmpty == true { keysByFormula.removeValue(forKey: formula) }
+        }
+    }
+
+    static func invalidateMathCache(for formulas: Set<String>) {
+        let keys = formulas.reduce(into: Set<String>()) { $0.formUnion(keysByFormula[$1] ?? []) }
+        for key in keys { remove(key) }
+        if !keys.isEmpty { order.removeAll { keys.contains($0) } }
+    }
 
     static func blocks(for source: String) -> [TranscriptRenderedBlock] {
         let key = cacheKey(for: source)
         if let cached = cache[key] { return cached }
         let built = build(from: source)
         cache[key] = built
+        let formulas = Set(MarkdownMath.formulaSources(in: source))
+        if !formulas.isEmpty {
+            formulasByKey[key] = formulas
+            for formula in formulas { keysByFormula[formula, default: []].insert(key) }
+        }
         order.append(key)
         if order.count > limit {
             let overflow = order.count - limit
-            for oldKey in order.prefix(overflow) { cache[oldKey] = nil }
+            for oldKey in order.prefix(overflow) { remove(oldKey) }
             order.removeFirst(overflow)
         }
         return built
@@ -2799,7 +2890,6 @@ private enum TranscriptAttributedStringCache {
         var hasher = Hasher()
         hasher.combine(source)
         hasher.combine(ThemeManager.shared.revision)
-        hasher.combine(MarkdownMath.mathJaxRevision)
         return "\(source.count):\(hasher.finalize())"
     }
 

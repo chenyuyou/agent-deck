@@ -33,7 +33,6 @@ enum MarkdownMath {
     ]
 
     static let mathJaxUpdated = Notification.Name("AgentDeckMathJaxUpdated")
-    static private(set) var mathJaxRevision = 0
     private static var mathJaxSVG: [String: String] = [:]
     private static var mathJaxPending: Set<String> = []
     private static var mathJaxFailed: Set<String> = []
@@ -58,11 +57,13 @@ enum MarkdownMath {
         mathJaxPending.remove(key)
         guard let svg else {
             mathJaxFailed.insert(key)
+            mathJaxFailedOrder.removeAll { $0 == key }
             mathJaxFailedOrder.append(key)
             if mathJaxFailedOrder.count > 128 { mathJaxFailed.remove(mathJaxFailedOrder.removeFirst()) }
             return
         }
         mathJaxSVG[key] = svg
+        mathJaxOrder.removeAll { $0 == key }
         mathJaxOrder.append(key)
         if mathJaxOrder.count > 128 { mathJaxSVG.removeValue(forKey: mathJaxOrder.removeFirst()) }
         updatedFormulae.insert(latex)
@@ -72,7 +73,8 @@ enum MarkdownMath {
             let formulas = updatedFormulae
             updatedFormulae.removeAll()
             updateTask = nil
-            mathJaxRevision &+= 1
+            NativeMarkdownTextContainer.invalidateMathCache(for: formulas)
+            TranscriptAttributedStringCache.invalidateMathCache(for: formulas)
             NotificationCenter.default.post(name: mathJaxUpdated, object: Array(formulas))
         }
     }
@@ -84,10 +86,8 @@ enum MarkdownMath {
     private static let codeRegex = try! NSRegularExpression(pattern: #"(?s)(`+).*?\1"#)
     private static let regexes = expressions.map { (try! NSRegularExpression(pattern: $0.0), $0.0, $0.1) }
 
-    static func prepare(_ source: String, font: NSFont, color: NSColor) -> Prepared {
-        guard source.contains("$") || source.contains("\\(") || source.contains("\\[") || source.contains("\\begin{") || (source.contains("[") && source.contains("\n")) else {
-            return Prepared(text: source, formulas: [])
-        }
+    private static func candidates(in source: String) -> [(NSRange, String, Bool)] {
+        guard source.contains("$") || source.contains("\\(") || source.contains("\\[") || source.contains("\\begin{") || (source.contains("[") && source.contains("\n")) else { return [] }
         let nsSource = source as NSString
         let full = NSRange(location: 0, length: nsSource.length)
         let codeRanges = codeRegex.matches(in: source, range: full).map(\.range)
@@ -104,6 +104,22 @@ enum MarkdownMath {
                 candidates.append((match.range, latex, display))
             }
         }
+        return candidates
+    }
+
+    static func formulaSources(in source: String) -> [String] {
+        return candidates(in: source).map { $0.1 }
+    }
+
+    static func prepare(_ source: String, font: NSFont, color: NSColor) -> Prepared {
+        let candidates = candidates(in: source)
+        guard !candidates.isEmpty else { return Prepared(text: source, formulas: []) }
+        let nsSource = source as NSString
+        // The app is always dark, but formula images may be built outside a view's drawing appearance.
+        var resolvedColor = color
+        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance {
+            resolvedColor = color.usingColorSpace(.deviceRGB) ?? color
+        }
         let result = NSMutableString(string: source)
         var formulas: [Formula] = []
         for (range, latex, display) in candidates.sorted(by: { $0.0.location > $1.0.location }) {
@@ -117,12 +133,12 @@ enum MarkdownMath {
                 MathJaxRenderer.shared.render(latex, display: display)
             }
             let svg = useNativeTextBox ? nil : mathJaxSVG[key]
-            let cacheKey = "\(ThemeManager.shared.revision)|\(font.pointSize)|\(color.description)|\(display)|\(svg == nil ? "native" : "mathjax")|\(latex)"
+            let cacheKey = "\(ThemeManager.shared.revision)|\(font.pointSize)|\(resolvedColor.description)|\(display)|\(svg == nil ? "native" : "mathjax")|\(latex)"
             let rendered: (NSImage, CGFloat)
             if let cached = imageCache[cacheKey] {
                 rendered = cached
             } else {
-                guard let image = svg.flatMap({ svgImage($0, font: font, color: color) }) ?? render(latex: latex, font: font, color: color, display: display) else { continue }
+                guard let image = svg.flatMap({ svgImage($0, font: font, color: resolvedColor) }) ?? render(latex: latex, font: font, color: resolvedColor, display: display) else { continue }
                 rendered = image
                 imageCache[cacheKey] = rendered
                 imageCacheOrder.append(cacheKey)

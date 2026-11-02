@@ -6,6 +6,48 @@ import XCTest
 final class MarkdownMathTests: XCTestCase {
     private let font = NSFont.systemFont(ofSize: 16)
 
+    func testMathJaxUsesDarkAppearanceTextColorOutsideDrawingContext() throws {
+        let latex = "color-appearance-regression"
+        MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
+        var prepared: MarkdownMath.Prepared?
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+            prepared = MarkdownMath.prepare("$$\(latex)$$", font: font, color: .labelColor)
+        }
+        let image = try XCTUnwrap(prepared?.formulas.first?.image)
+        var rect = NSRect(origin: .zero, size: image.size)
+        let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(image.cgImage(forProposedRect: &rect, context: nil, hints: nil)))
+        let pixel = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(pixel.redComponent, 0.7, "Formula foreground must be visible on the app's dark background")
+    }
+
+    func testRealMathJaxFormulaIsLightOnDarkBackground() async throws {
+        let latex = #"\frac{2026}{x^2}"#
+        let source = "$$\(latex)$$"
+        _ = MarkdownMath.prepare(source, font: font, color: .labelColor)
+        let deadline = Date().addingTimeInterval(8)
+        while MarkdownMath.mathJaxTestState(latex, display: true) == "pending" && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(MarkdownMath.mathJaxTestState(latex, display: true), "rendered")
+        var prepared: MarkdownMath.Prepared?
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+            prepared = MarkdownMath.prepare(source, font: font, color: .labelColor)
+        }
+        let image = try XCTUnwrap(prepared?.formulas.first?.image)
+        var rect = NSRect(origin: .zero, size: image.size)
+        let bitmap = NSBitmapImageRep(cgImage: try XCTUnwrap(image.cgImage(forProposedRect: &rect, context: nil, hints: nil)))
+        var brightness: [CGFloat] = []
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.5 {
+                    brightness.append(color.redComponent)
+                }
+            }
+        }
+        XCTAssertFalse(brightness.isEmpty)
+        XCTAssertGreaterThan(brightness.reduce(0, +) / CGFloat(max(brightness.count, 1)), 0.7)
+    }
+
     func testChineseMultilineExampleRendersAndPreservesSource() throws {
         let source = "[\n\\text{客观收益}\n\\rightarrow\n\\text{比较或适应度}\n\\rightarrow\n\\text{合作边界}.\n]"
         let result = MarkdownMath.prepare(source, font: font, color: .labelColor)
@@ -162,6 +204,49 @@ final class MarkdownMathTests: XCTestCase {
             return view.subviews.lazy.compactMap { findText($0) }.first
         }
         XCTAssertEqual(findText(container)?.string, "Newer message")
+    }
+
+    func testMathJaxUpdateKeepsUnrelatedTextViews() async throws {
+        let latex = #"\bbox[red]{refreshOnlyThisFormula}"#
+        let source = "First paragraph.\n\n$$\(latex)$$\n\nLast paragraph."
+        let container = NativeMarkdownTextContainer(frame: .zero)
+        let applier = MarkdownSourceApplier()
+        defer { applier.cancel(); container.dismantle() }
+        applier.apply(source: source, to: container)
+        func textViews(_ view: NSView) -> [NSTextView] {
+            (view as? NSTextView).map { [$0] } ?? view.subviews.flatMap(textViews)
+        }
+        let before = textViews(container)
+        XCTAssertEqual(before.count, 3)
+        MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
+        try await Task.sleep(for: .milliseconds(150))
+        let after = textViews(container)
+        XCTAssertEqual(after.count, 3)
+        XCTAssertTrue(before[0] === after[0])
+        XCTAssertTrue(before[2] === after[2])
+        let storage = try XCTUnwrap(after[1].textStorage)
+        XCTAssertNotNil(storage.attribute(.attachment, at: 0, effectiveRange: nil))
+    }
+
+    func testStreamingAppendDoesNotRescanUnchangedBlocks() {
+        let container = NativeMarkdownTextContainer(frame: .zero)
+        let applier = MarkdownSourceApplier()
+        defer { applier.cancel(); container.dismantle() }
+        let initial = (0..<30).map { "Paragraph \($0): $x_\($0)$" }.joined(separator: "\n\n")
+        applier.apply(source: initial, to: container)
+        let count = NativeMarkdownTextContainer.formulaIndexScanCount
+        applier.apply(source: initial + "\n\nNew paragraph $y$", to: container)
+        XCTAssertEqual(NativeMarkdownTextContainer.formulaIndexScanCount - count, 1)
+    }
+
+    func testFormulaCompletionInvalidatesTranscriptCache() async throws {
+        let latex = #"\bbox[blue]{cachedTranscriptRegression}"#
+        let source = "$$\(latex)$$"
+        _ = TranscriptAttributedStringBuilder.attributedString(for: source)
+        MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
+        try await Task.sleep(for: .milliseconds(150))
+        let rendered = TranscriptAttributedStringBuilder.attributedString(for: source)
+        XCTAssertNotEqual((rendered.string as NSString).range(of: "\u{FFFC}").location, NSNotFound)
     }
 
     func testTranscriptBuilderIncludesFormulaAttachment() {
