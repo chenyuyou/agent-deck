@@ -55,6 +55,15 @@ saved even when the final message omits it or arrives before the next batch.
 These behaviors are implemented in `PiAgentRunnerService.swift` and covered by
 the fake-Pi streaming and reload tests in `PiAgentBridgeSmokeTests.swift`.
 
+## Per-session agent models
+
+After a session starts, open **Session resources → Configure agent models** to
+change each selected Deck agent's model and thinking level. Changes are saved
+immediately to that session's launch overrides and apply to subsequent agent
+launches or continuations. Queued graph tasks read the latest session settings
+when their launch begins. An agent already executing keeps its current model.
+The controls also support restoring agent defaults or choosing Pi defaults.
+
 ## Important distinction: subagents
 
 Parent Pi sessions receive generated bridge tools such as `managed_subagent`, while the app launches and tracks child Pi RPC processes itself.

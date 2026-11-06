@@ -3978,7 +3978,8 @@ final class AppViewModel: NSObject {
 
     @discardableResult
     private func runNativeSubagent(parentSession: PiAgentSessionRecord, agentName: String, task: String, continueRunID: UUID? = nil, useWorktreeIsolation: Bool, allowDirectProjectWrites: Bool = false, expectedOutcome: PiSubagentExpectedOutcome = .reportOnly, requestedOutputPath: String? = nil, allowOverwrite: Bool = false, readFirstPaths: [String] = [], completion: ((PiSubagentRunRecord) -> Void)?) async -> PiSubagentRunRecord {
-        guard piAgentSessionStore.sessions.contains(where: { $0.id == parentSession.id }) else {
+        // Queued graph tasks retain the session from graph creation; resolve settings at launch.
+        guard let parentSession = piAgentSessionStore.sessions.first(where: { $0.id == parentSession.id }) else {
             return PiSubagentRunRecord.failedPlaceholder(parentSessionID: parentSession.id, agentName: agentName, task: task, error: "The parent session was deleted.")
         }
         guard !parentSession.isNoProject, let projectPath = parentSession.projectPathForProjectFeatures else {

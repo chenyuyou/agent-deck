@@ -244,8 +244,13 @@ final class PiAgentSessionStoreTests: XCTestCase {
         let firstStore = PiAgentSessionStore(fileURL: fileURL)
         let session = firstStore.createSession(kind: .project, title: "Overrides", project: try PiTestSupport.makeProject(), repository: nil)
         firstStore.updateSession(session.id) {
+            $0.status = .running
+            $0.agentLaunchOverrides = ["explorer": .init(model: .value("openai/initial"), thinking: .value("low"))]
+        }
+        firstStore.updateSession(session.id) {
             $0.agentLaunchOverrides = ["explorer": .init(model: .piDefault, thinking: .value("high"))]
         }
+        XCTAssertEqual(firstStore.sessions.first(where: { $0.id == session.id })?.status, .running)
         firstStore.flushForTesting()
 
         let reloadedStore = PiAgentSessionStore(fileURL: fileURL)

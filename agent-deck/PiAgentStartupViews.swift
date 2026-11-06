@@ -82,6 +82,7 @@ struct PiAgentStartupResourcesPopover: View {
     // recompute the recap on every streaming pulse.
     @State private var toolRecap: [PiAgentToolCallRecapItem] = []
     @State private var mcpRecap: [PiAgentMCPSessionRecap] = []
+    @State private var isAgentModelsPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -106,6 +107,12 @@ struct PiAgentStartupResourcesPopover: View {
                         resourceSection("Context", icon: "doc.text", items: contextItems, columns: 1)
                         resourceSection("Environment", icon: "key", items: envItems, columns: 1)
                         resourceSection("Agents", icon: "paperplane", items: agentItems, columns: 1, showsDetails: true)
+                        if !session.isNoProject && session.subagentsEnabled {
+                            Button { isAgentModelsPresented = true } label: {
+                                Label("Configure agent models", systemImage: "slider.horizontal.3")
+                            }
+                            .appSmallSecondaryButton()
+                        }
                         resourceSection("Memory", icon: "brain", items: memoryItems, columns: 1, showsDetails: true)
                         resourceSection("Skills", icon: "wand.and.stars", items: skillItems, columns: 1)
                         resourceSection("Prompts", icon: AppSymbols.promptTemplate, items: promptItems, columns: 1)
@@ -115,6 +122,9 @@ struct PiAgentStartupResourcesPopover: View {
             }
         }
         .frame(width: AppTheme.Popover.wideWidth, height: 480)
+        .sheet(isPresented: $isAgentModelsPresented) {
+            PiAgentSessionModelsSheet(viewModel: viewModel, sessionID: session.id)
+        }
         .onAppear {
             toolRecap = viewModel.toolCallRecap(forSessionID: session.id)
             mcpRecap = viewModel.mcpSessionRecap(for: session)
@@ -478,13 +488,37 @@ struct PiAgentStartupResourcesPopover: View {
     }
 }
 
-/// Pre-launch picker that lets a draft session choose which subagents it
-/// launches with. Shown in the chat area above the composer only while the
-/// session is a draft with subagents enabled; once the first message is sent
-/// the catalog is baked into the system prompt and the card disappears.
+struct PiAgentSessionModelsSheet: View {
+    var viewModel: AppViewModel
+    let sessionID: UUID
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Agent models").font(.title2)
+            Text("Saved to this session. Changes apply when an agent is next launched or continued; running agents keep their current model.")
+                .font(.callout)
+                .foregroundStyle(AppTheme.mutedText)
+            if let session = viewModel.piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) {
+                PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session, modelEditingOnly: true)
+            }
+        }
+        .padding(20)
+        .frame(width: 760)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+            }
+        }
+    }
+}
+
+/// Session agent picker, also reused for model-only editing after launch.
 struct PiAgentSessionSubagentPickerCard: View {
     var viewModel: AppViewModel
     let session: PiAgentSessionRecord
+
+    var modelEditingOnly = false
 
     @State private var isExpanded = false
     @State private var isExpandedContentVisible = false
@@ -641,7 +675,16 @@ struct PiAgentSessionSubagentPickerCard: View {
 
     var body: some View {
         // General Chat sessions never expose Deck-agent delegation.
-        if session.isNoProject {
+        if modelEditingOnly {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(viewModel.catalogAgents(for: session), id: \.name) { agent in
+                        agentRow(agent, checked: true, selection: [])
+                    }
+                }
+            }
+            .frame(height: 400)
+        } else if session.isNoProject {
 #if DEBUG
             if stressExpansionRequest != nil {
                 cardBody
@@ -987,7 +1030,8 @@ struct PiAgentSessionSubagentPickerCard: View {
                 withAnimation(.easeOut(duration: 0.22)) {
                     viewModel.bindPiAgentDraft(session.id, to: agent)
                 }
-            }
+            },
+            modelEditingOnly: modelEditingOnly
         )
     }
 
@@ -1363,13 +1407,19 @@ private struct PiAgentSubagentPickerRow: View {
     let onToggle: () -> Void
     let onStartDirectChat: () -> Void
 
+    var modelEditingOnly = false
+
     @State private var isHovered = false
 
     private static let accent = PiAgentSessionSubagentPickerCard.accent
 
     var body: some View {
         PiAgentAdaptiveRowLayout {
-            identityToggle
+            if modelEditingOnly {
+                Text(agent.name).font(.callout.weight(.medium))
+            } else {
+                identityToggle
+            }
             launchControls
         }
         .padding(.horizontal, 8)

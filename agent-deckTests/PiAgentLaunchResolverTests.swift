@@ -1,11 +1,39 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import agent_deck
 
 final class PiAgentLaunchResolverTests: XCTestCase {
     @MainActor
+    func testRunningSessionModelEditorUpdatesSessionWithoutChangingActiveState() throws {
+        let viewModel = AppViewModel()
+        let store = viewModel.piAgentSessionStore
+        let session = store.createSession(kind: .project, title: "Running editor", project: try PiTestSupport.makeProject(), repository: nil)
+        defer { store.deleteSessions([session.id], fallbackSelectionID: nil) }
+        store.updateSession(session.id) { $0.status = .running }
+        let host = NSHostingView(rootView: PiAgentSessionModelsSheet(viewModel: viewModel, sessionID: session.id))
+        host.frame = NSRect(x: 0, y: 0, width: 760, height: 520)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.height, 400)
+        XCTAssertLessThan(host.fittingSize.height, 700)
+
+        viewModel.setAgentLaunchOverride(.value("openai/chosen"), for: "explorer", field: \.model, sessionID: session.id)
+        viewModel.setAgentLaunchOverride(.value("high"), for: "explorer", field: \.thinking, sessionID: session.id)
+        let updated = try XCTUnwrap(store.sessions.first { $0.id == session.id })
+        XCTAssertEqual(updated.status, .running)
+        XCTAssertEqual(updated.agentLaunchOverrides?["explorer"]?.model, .value("openai/chosen"))
+        XCTAssertEqual(updated.agentLaunchOverrides?["explorer"]?.thinking, .value("high"))
+        host.layoutSubtreeIfNeeded()
+        viewModel.setAgentLaunchOverride(nil, for: "explorer", field: \.model, sessionID: session.id)
+        viewModel.setAgentLaunchOverride(nil, for: "explorer", field: \.thinking, sessionID: session.id)
+        XCTAssertNil(store.sessions.first { $0.id == session.id }?.agentLaunchOverrides)
+    }
+
+    @MainActor
     func testSessionOverridesResolvePerAgentForDisplayAndLaunch() throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         var session = store.createSession(kind: .project, title: "Test", project: try PiTestSupport.makeProject(), repository: nil)
+        session.status = .running
         session.agentLaunchOverrides = ["explorer": .init(model: .value("openai/default"), thinking: .value("low"))]
         let explorer = AppViewModel.applyingSessionLaunchOverrides(to: effectiveAgent(name: "explorer", id: "explorer"), session: session)
         let reviewer = effectiveAgent(name: "reviewer", id: "reviewer")
@@ -21,6 +49,7 @@ final class PiAgentLaunchResolverTests: XCTestCase {
         XCTAssertEqual(other.resolved.model, "other/reviewer")
         XCTAssertEqual(other.resolved.thinking, "medium")
         XCTAssertEqual(PiSubagentLaunchPlanner.modelSelection(for: displayed, parentSession: session).modelArgument, "openai/chosen:high")
+        XCTAssertEqual(explorer.resolved.model, "openai/default", "An already resolved launch keeps its model")
 
         session.agentLaunchOverrides = ["explorer": .init(model: .piDefault, thinking: .piDefault)]
         let piDefault = AppViewModel.applyingSessionLaunchOverrides(to: explorer, session: session)
