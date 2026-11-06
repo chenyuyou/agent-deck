@@ -1,5 +1,8 @@
 # Build, Test & Verification
 
+For the complete debug sequence, risk matrix, isolation rules, and delivery gates,
+see [DEBUGGING.md](DEBUGGING.md).
+
 ## Build
 
 ```bash

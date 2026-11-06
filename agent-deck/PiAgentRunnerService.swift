@@ -16,14 +16,14 @@ enum RPCDebugLog {
         return FileHandle(forWritingAtPath: "/tmp/agentdeck-rpc.log")
     }()
 
-    static func log(_ line: String) {
+    static func log(_ line: @autoclosure () -> String) {
         guard enabled else { return }
-        let out = line + "\n"
+        let out = line() + "\n"
         FileHandle.standardError.write(Data("[rpc] \(out)".utf8))
         handle?.write(Data(out.utf8))
     }
 #else
-    static func log(_ line: String) {}
+    static func log(_ line: @autoclosure () -> String) {}
 #endif
 }
 
@@ -101,6 +101,9 @@ final class PiAgentRunnerService {
     private var assistantTextBySessionID: [UUID: String] = [:]
     private var thinkingEntryIDsBySessionID: [UUID: UUID] = [:]
     private var thinkingTextBySessionID: [UUID: String] = [:]
+    // A flush must publish only the roles that received new deltas.
+    private var dirtyAssistantSessionIDs: Set<UUID> = []
+    private var dirtyThinkingSessionIDs: Set<UUID> = []
     private var toolEntryIDsByCallID: [String: UUID] = [:]
     /// A tool call's arguments, captured from `tool_execution_start` and kept until
     /// the call ends. The update/end events drop the top-level `args`, but transcript
@@ -1433,8 +1436,10 @@ final class PiAgentRunnerService {
                 let entryID = UUID()
                 assistantEntryIDsBySessionID[sessionID] = entryID
                 assistantTextBySessionID[sessionID] = ""
+                dirtyAssistantSessionIDs.remove(sessionID)
                 thinkingEntryIDsBySessionID[sessionID] = nil
                 thinkingTextBySessionID[sessionID] = nil
+                dirtyThinkingSessionIDs.remove(sessionID)
                 store.upsert(.init(id: entryID, sessionID: sessionID, role: .assistant, title: "Assistant", text: "", rawJSON: nil))
                 store.setProcessingActivity(.preparing, for: sessionID)
             }
@@ -1864,12 +1869,14 @@ final class PiAgentRunnerService {
                 let entryID = thinkingEntryIDsBySessionID[sessionID] ?? UUID()
                 thinkingEntryIDsBySessionID[sessionID] = entryID
                 thinkingTextBySessionID[sessionID, default: ""] += delta
+                dirtyThinkingSessionIDs.insert(sessionID)
                 store.setProcessingActivity(.reasoning, for: sessionID)
                 scheduleStreamingFlush(sessionID: sessionID)
             } else {
                 let entryID = assistantEntryIDsBySessionID[sessionID] ?? UUID()
                 assistantEntryIDsBySessionID[sessionID] = entryID
                 assistantTextBySessionID[sessionID, default: ""] += delta
+                dirtyAssistantSessionIDs.insert(sessionID)
                 store.setProcessingActivity(.responding, for: sessionID)
                 scheduleStreamingFlush(sessionID: sessionID)
             }
@@ -1896,20 +1903,19 @@ final class PiAgentRunnerService {
     }
 
     private func streamingFlushDelay(for sessionID: UUID) -> UInt64 {
-        let characterCount = (assistantTextBySessionID[sessionID]?.count ?? 0) + (thinkingTextBySessionID[sessionID]?.count ?? 0)
-        return Self.streamingFlushDelay(
+        Self.streamingFlushDelay(
             isSelected: store.selectedSessionID == sessionID,
-            characterCount: characterCount
+            characterCount: (assistantTextBySessionID[sessionID]?.count ?? 0) + (thinkingTextBySessionID[sessionID]?.count ?? 0)
         )
     }
 
     /// The selected transcript owns the visible streaming cadence. Background sessions
     /// retain an adaptive policy so they do not spend the same UI budget on unseen work.
-    static func streamingFlushDelay(isSelected: Bool, characterCount: Int) -> UInt64 {
+    static func streamingFlushDelay(isSelected: Bool, characterCount: @autoclosure () -> Int) -> UInt64 {
         if isSelected {
             return 33_000_000 // ~30 fps
         }
-        switch characterCount {
+        switch characterCount() {
         case 0..<1_000:
             return 33_000_000 // ~30 fps
         case 1_000..<4_000:
@@ -1920,7 +1926,8 @@ final class PiAgentRunnerService {
     }
 
     private func flushStreamingEntries(sessionID: UUID) {
-        if let thinkingEntryID = thinkingEntryIDsBySessionID[sessionID],
+        if dirtyThinkingSessionIDs.remove(sessionID) != nil,
+           let thinkingEntryID = thinkingEntryIDsBySessionID[sessionID],
            let thinkingText = thinkingTextBySessionID[sessionID],
            !thinkingText.isEmpty {
             store.upsert(.init(
@@ -1933,7 +1940,8 @@ final class PiAgentRunnerService {
             ), before: assistantEntryIDsBySessionID[sessionID], persist: false, revisionPolicy: .immediateForSelectedSession)
         }
 
-        if let assistantEntryID = assistantEntryIDsBySessionID[sessionID],
+        if dirtyAssistantSessionIDs.remove(sessionID) != nil,
+           let assistantEntryID = assistantEntryIDsBySessionID[sessionID],
            let assistantText = assistantTextBySessionID[sessionID] {
             store.upsert(.init(
                 id: assistantEntryID,
@@ -1954,8 +1962,10 @@ final class PiAgentRunnerService {
         store.setProcessingActivity(nil, for: sessionID)
         assistantEntryIDsBySessionID[sessionID] = nil
         assistantTextBySessionID[sessionID] = nil
+        dirtyAssistantSessionIDs.remove(sessionID)
         thinkingEntryIDsBySessionID[sessionID] = nil
         thinkingTextBySessionID[sessionID] = nil
+        dirtyThinkingSessionIDs.remove(sessionID)
         pendingFreeformResponsesBySessionID[sessionID] = nil
         pendingThinkingLevelsBySessionID[sessionID] = nil
         activeAgentRunSessionIDs.remove(sessionID)
@@ -1984,10 +1994,17 @@ final class PiAgentRunnerService {
             // saw. Capture it before clearing the buffer so we can fall back to it
             // below when the end event omits the body.
             let streamedText = assistantTextBySessionID[sessionID] ?? ""
+            let streamedThinking = thinkingTextBySessionID[sessionID] ?? ""
             assistantEntryIDsBySessionID[sessionID] = nil
             assistantTextBySessionID[sessionID] = nil
+            dirtyAssistantSessionIDs.remove(sessionID)
             thinkingEntryIDsBySessionID[sessionID] = nil
             thinkingTextBySessionID[sessionID] = nil
+            dirtyThinkingSessionIDs.remove(sessionID)
+            // message_end may cancel the timer before its last thinking delta is published.
+            if !streamedThinking.isEmpty {
+                store.upsert(.init(id: thinkingEntryID, sessionID: sessionID, role: .thinking, title: "Thinking", text: streamedThinking, rawJSON: nil), before: thinkingBeforeID)
+            }
             let visibleText = extractAssistantText(from: message)
             RPCDebugLog.log("  finalize assistant: entryID=\(assistantEntryID.uuidString.prefix(8)) visibleLen=\(visibleText.count) streamedLen=\(streamedText.count) dedup=\(visibleText.isEmpty ? false : recentAssistantEntryExists(with: visibleText, sessionID: sessionID, excluding: assistantEntryID)) recentAssistantCount=\(store.transcript(for: sessionID).suffix(8).filter { $0.role == .assistant }.count)")
             if !visibleText.isEmpty {
@@ -2360,6 +2377,7 @@ final class PiAgentRunnerService {
               !thinkingText.isEmpty else {
             thinkingEntryIDsBySessionID[sessionID] = nil
             thinkingTextBySessionID[sessionID] = nil
+            dirtyThinkingSessionIDs.remove(sessionID)
             return
         }
         store.upsert(.init(
@@ -2372,6 +2390,7 @@ final class PiAgentRunnerService {
         ), before: assistantEntryIDsBySessionID[sessionID], persist: false)
         thinkingEntryIDsBySessionID[sessionID] = nil
         thinkingTextBySessionID[sessionID] = nil
+        dirtyThinkingSessionIDs.remove(sessionID)
     }
 
     /// Pulls the one meaningful argument out of a tool call — the file it

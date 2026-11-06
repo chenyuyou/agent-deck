@@ -45,6 +45,16 @@ Agent Deck provides:
 - app-owned artifacts, run graphs, transcripts, supervisor requests, and worktrees
 - safer library/active resource management
 
+## Transcript streaming
+
+Agent Deck batches streaming transcript updates. A batch updates only assistant
+or thinking content that received new deltas, so continuing an answer does not
+rewrite an unchanged thinking block. At message completion, buffered thinking is
+saved even when the final message omits it or arrives before the next batch.
+
+These behaviors are implemented in `PiAgentRunnerService.swift` and covered by
+the fake-Pi streaming and reload tests in `PiAgentBridgeSmokeTests.swift`.
+
 ## Important distinction: subagents
 
 Parent Pi sessions receive generated bridge tools such as `managed_subagent`, while the app launches and tracks child Pi RPC processes itself.

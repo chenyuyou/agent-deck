@@ -3,6 +3,62 @@ import XCTest
 
 @MainActor
 final class PiAgentBridgeSmokeTests: XCTestCase {
+    func testMessageEndPreservesPendingThinkingWithoutFinalThinkingPayload() throws {
+        let harness = try PiTestSupport.makeBridgeHarness(events: [
+            ["type": "turn_start"],
+            ["type": "message_update", "assistantMessageEvent": ["type": "thinking_delta", "delta": "Last reasoning"]],
+            ["type": "message_end", "message": ["role": "assistant", "content": [["type": "text", "text": "Final answer"]]]]
+        ])
+        defer { harness.restoreEnvironment() }
+        let fileURL = PiTestSupport.temporaryStateFile()
+        let store = PiAgentSessionStore(fileURL: fileURL)
+        let runner = PiAgentRunnerService(store: store)
+        let session = store.createSession(kind: .project, title: "Final flush", project: try PiTestSupport.makeProject(), repository: nil)
+        runner.resume(session: session)
+        defer { runner.stop(sessionID: session.id, recordTranscript: false) }
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 3) {
+            store.transcript(for: session.id).contains { $0.role == .assistant && $0.text == "Final answer" }
+        })
+        XCTAssertEqual(store.transcript(for: session.id).filter { $0.role == .thinking }.map(\.text), ["Last reasoning"])
+        store.flushForTesting()
+        let restored = PiAgentSessionStore(fileURL: fileURL)
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 3) { !restored.sessions.isEmpty })
+        XCTAssertEqual(restored.transcript(for: session.id).filter { $0.role == .thinking }.map(\.text), ["Last reasoning"])
+    }
+
+    func testAssistantStreamingDoesNotRewriteUnchangedThinking() throws {
+        let directory = try PiTestSupport.temporaryProjectURL()
+        let executable = directory.appendingPathComponent("pi")
+        let gate = directory.appendingPathComponent("continue")
+        let script = """
+        #!/bin/sh
+        sleep 0.2
+        printf '%s\\n' '{"type":"turn_start"}' '{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Reasoning"}}'
+        while [ ! -f \(PiTestSupport.shellSingleQuoted(gate.path)) ]; do sleep 0.02; done
+        printf '%s\\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Answer"}}'
+        cat >/dev/null
+        """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let previous = getenv("AGENT_DECK_PI_PATH").map { String(cString: $0) }
+        setenv("AGENT_DECK_PI_PATH", executable.path, 1)
+        defer { restoreEnv("AGENT_DECK_PI_PATH", oldValue: previous) }
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiAgentRunnerService(store: store)
+        let session = store.createSession(kind: .project, title: "Stream", project: try PiTestSupport.makeProject(url: directory), repository: nil)
+        runner.resume(session: session)
+        defer { runner.stop(sessionID: session.id, recordTranscript: false) }
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 3) {
+            store.transcript(for: session.id).contains { $0.role == .thinking && $0.text == "Reasoning" }
+        })
+        let thinking = try XCTUnwrap(store.transcript(for: session.id).first { $0.role == .thinking })
+        try Data().write(to: gate)
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 3) {
+            store.transcript(for: session.id).contains { $0.role == .assistant && $0.text == "Answer" }
+        })
+        XCTAssertEqual(store.transcript(for: session.id).first { $0.role == .thinking }, thinking)
+    }
+
     func testModernPiWaitsForSettledBeforeCompletingRun() throws {
         let directory = try PiTestSupport.temporaryProjectURL()
         let executable = directory.appendingPathComponent("pi")
@@ -30,6 +86,31 @@ final class PiAgentBridgeSmokeTests: XCTestCase {
         XCTAssertEqual(store.sessions.first(where: { $0.id == session.id })?.status, .running)
         XCTAssertTrue(PiTestSupport.waitUntil(timeout: 4) { store.sessions.first(where: { $0.id == session.id })?.status == .idle })
     }
+    func testSelectedStreamingCadenceDoesNotEvaluateTextLength() {
+        var evaluated = false
+        func countCharacters() -> Int {
+            evaluated = true
+            return 10_000
+        }
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: countCharacters()), 33_000_000)
+        XCTAssertFalse(evaluated)
+        XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: false, characterCount: countCharacters()), 60_000_000)
+        XCTAssertTrue(evaluated)
+    }
+
+    func testDisabledRPCLogDoesNotEvaluateMessage() throws {
+#if DEBUG
+        try XCTSkipIf(RPCDebugLog.enabled, "RPC logging explicitly enabled")
+#endif
+        var evaluated = false
+        func message() -> String {
+            evaluated = true
+            return "Expensive diagnostic"
+        }
+        RPCDebugLog.log(message())
+        XCTAssertFalse(evaluated)
+    }
+
     func testStreamingFlushCadenceUsesFixedSelectedPolicyAndAdaptiveBackgroundPolicy() {
         XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 0), 33_000_000)
         XCTAssertEqual(PiAgentRunnerService.streamingFlushDelay(isSelected: true, characterCount: 10_000), 33_000_000)

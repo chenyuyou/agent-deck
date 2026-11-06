@@ -863,6 +863,13 @@ final class PiAgentSessionStore {
 
     func updateSession(_ id: UUID, bumpUpdatedAt: Bool = false, mutate: (inout PiAgentSessionRecord) -> Void) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        var updated = sessions[index]
+        mutate(&updated)
+        if bumpUpdatedAt {
+            updated.updatedAt = Date()
+        }
+        // Mutating the observed array in place invalidates readers even for equal values.
+        guard updated != sessions[index] else { return }
         // Avoid an unconditional sortSessions() — every `sessions.sort` is an Observable
         // write on `sessions`, and many per-frame calls during streaming were tripping
         // SwiftUI's "onChange action ran multiple times per frame" warning. Only the
@@ -875,10 +882,7 @@ final class PiAgentSessionStore {
         let preStatus = sessions[index].status
         let preLastNotificationAt = sessions[index].lastNotificationAt
         let preLastUserMessageAt = sessions[index].lastUserMessageAt
-        mutate(&sessions[index])
-        if bumpUpdatedAt {
-            sessions[index].updatedAt = Date()
-        }
+        sessions[index] = updated
         let postUpdatedAtDay = Calendar.current.startOfDay(for: sessions[index].updatedAt)
         if postUpdatedAtDay != preUpdatedAtDay {
             sortSessions()

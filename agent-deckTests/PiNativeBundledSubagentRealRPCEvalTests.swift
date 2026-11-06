@@ -391,6 +391,8 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
         let afterStatus = gitStatus(in: projectURL)
         XCTAssertEqual(afterStatus, beforeStatus, "Real RPC eval changed the working tree. Inspect \(outputRoot.path) and the git diff before continuing.")
         XCTAssertFalse(summaries.isEmpty)
+        let incomplete = summaries.filter { $0.status != PiSubagentRunStatus.completed.rawValue }
+        XCTAssertTrue(incomplete.isEmpty, "Incomplete live runs: \(incomplete.map { "\($0.agent)/\($0.model)/\($0.thinking): \($0.status)" }.joined(separator: "; "))")
     }
 
     private func runEval(
@@ -589,7 +591,8 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
 
     private func loadModelPricing(runConfigs: [EvalRunConfig]) throws -> [String: EvalModelPricing] {
         let piPath = try XCTUnwrap(ProcessInfo.processInfo.environment["AGENT_DECK_PI_PATH"], "AGENT_DECK_PI_PATH is required to load Pi model pricing.")
-        let packageRoot = piPackageRoot(from: URL(fileURLWithPath: piPath).resolvingSymlinksInPath())
+        let packageRoot = PiExecutableResolver.managedPackageRoot(piPath: piPath)
+            ?? piPackageRoot(from: URL(fileURLWithPath: piPath).resolvingSymlinksInPath())
         let authStorage = packageRoot.appendingPathComponent("dist/core/auth-storage.js").absoluteString
         let modelRegistry = packageRoot.appendingPathComponent("dist/core/model-registry.js").absoluteString
         let requested = Set(runConfigs.map { pricingKey(provider: $0.provider, model: $0.model) })
@@ -597,14 +600,22 @@ final class PiNativeBundledSubagentRealRPCEvalTests: XCTestCase {
         let script = """
         import { AuthStorage } from '\(authStorage)';
         import { ModelRegistry } from '\(modelRegistry)';
+        import * as publicAPI from '\(packageRoot.appendingPathComponent("dist/index.js").absoluteString)';
         const requested = new Set(\(requestedJSON));
-        const registry = ModelRegistry.create(AuthStorage.create());
-        const rows = registry.getAll()
+        let allModels;
+        if (typeof publicAPI.ModelRuntime?.create === 'function') {
+          const runtime = await publicAPI.ModelRuntime.create({ allowModelNetwork: false });
+          allModels = [...runtime.getModels()];
+        } else {
+          allModels = ModelRegistry.create(AuthStorage.create()).getAll();
+        }
+        const rows = allModels
           .filter((model) => requested.has(`${model.provider}/${model.id}`))
           .map((model) => ({ provider: model.provider, model: model.id, cost: model.cost }));
         console.log(JSON.stringify(rows));
         """
-        let output = try runProcess(executable: "/usr/bin/env", arguments: ["node", "--input-type=module", "-e", script])
+        let node = try XCTUnwrap(PiExecutableResolver().resolveNode(), "Node is required for live Pi pricing discovery")
+        let output = try runProcess(executable: node.path, arguments: ["--input-type=module", "-e", script])
         let rows = try JSONDecoder().decode([PiModelPricingRow].self, from: Data(output.utf8))
         let pricing = Dictionary(uniqueKeysWithValues: rows.map { row in
             (pricingKey(provider: row.provider, model: row.model), EvalModelPricing(

@@ -55,8 +55,11 @@ final class PerfHeadlessBenchmarks: XCTestCase {
     func testLargeTranscriptMarkdownAttributionPerformance() {
         let options = XCTMeasureOptions()
         options.iterationCount = 10
+        var sample = 0
         measure(metrics: [XCTClockMetric()], options: options) {
-            _ = TranscriptAttributedStringBuilder.attributedString(for: largeTranscriptMarkdown)
+            // Each iteration must miss the transcript cache to measure attribution.
+            sample += 1
+            _ = TranscriptAttributedStringBuilder.attributedString(for: largeTranscriptMarkdown + "\n\nSample \(sample)")
         }
     }
 

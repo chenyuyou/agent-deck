@@ -14,6 +14,10 @@ xcodebuild \
 
 ## Tests
 
+For systematic debugging, follow the [debug workflow](../../docs/agent-guidelines/DEBUGGING.md).
+Record failures and skips separately, enable manual rendering diagnostics explicitly,
+and run performance measurements serially with consistent fixtures.
+
 ```bash
 xcodebuild \
   -project agent-deck.xcodeproj \

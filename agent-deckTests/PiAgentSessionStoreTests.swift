@@ -1,8 +1,50 @@
+import Observation
 import XCTest
 @testable import agent_deck
 
 @MainActor
 final class PiAgentSessionStoreTests: XCTestCase {
+    func testRepeatedEqualSessionUpdatesDoNotInvalidateObservers() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Unchanged", project: try PiTestSupport.makeProject(), repository: nil)
+        let revision = store.sessionListRevision
+        let changed = expectation(description: "Equal updates must not invalidate sessions")
+        changed.isInverted = true
+        withObservationTracking {
+            _ = store.sessions
+        } onChange: {
+            changed.fulfill()
+        }
+
+        for _ in 0..<100 {
+            store.updateSession(session.id) { $0.status = session.status }
+        }
+
+        XCTAssertEqual(store.sessions.first, session)
+        XCTAssertEqual(store.sessionListRevision, revision)
+        wait(for: [changed], timeout: 0.01)
+    }
+
+    func testChangedSessionUpdateStillInvalidatesAndBumpsTimestamp() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let session = store.createSession(kind: .project, title: "Before", project: try PiTestSupport.makeProject(), repository: nil)
+        let revision = store.sessionListRevision
+        let changed = expectation(description: "Changed update invalidates sessions")
+        withObservationTracking {
+            _ = store.sessions
+        } onChange: {
+            changed.fulfill()
+        }
+
+        store.updateSession(session.id) { $0.title = "After" }
+        XCTAssertEqual(store.sessions.first?.title, "After")
+        XCTAssertEqual(store.sessionListRevision, revision + 1)
+        store.updateSession(session.id, bumpUpdatedAt: true) { _ in }
+        XCTAssertGreaterThan(store.sessions.first!.updatedAt, session.updatedAt)
+        store.flushForTesting()
+        wait(for: [changed], timeout: 0.1)
+    }
+
     func testComposerDraftsRemainScopedToTheirSessionForStoreLifetime() throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let project = try PiTestSupport.makeProject()

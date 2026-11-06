@@ -218,8 +218,11 @@ final class MarkdownMathTests: XCTestCase {
         }
         let before = textViews(container)
         XCTAssertEqual(before.count, 3)
+        let updated = expectation(forNotification: MarkdownMath.mathJaxUpdated, object: nil) {
+            ($0.object as? [String])?.contains(latex) == true
+        }
         MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
-        try await Task.sleep(for: .milliseconds(150))
+        await fulfillment(of: [updated], timeout: 3)
         let after = textViews(container)
         XCTAssertEqual(after.count, 3)
         XCTAssertTrue(before[0] === after[0])
@@ -240,8 +243,11 @@ final class MarkdownMathTests: XCTestCase {
         }
         let before = textViews(container)
         XCTAssertEqual(before.count, 4)
+        let updated = expectation(forNotification: MarkdownMath.mathJaxUpdated, object: nil) {
+            ($0.object as? [String])?.contains(latex) == true
+        }
         MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
-        try await Task.sleep(for: .milliseconds(150))
+        await fulfillment(of: [updated], timeout: 3)
         let after = textViews(container)
         XCTAssertEqual(after.count, before.count)
         for (old, new) in zip(before, after) { XCTAssertTrue(old === new) }
@@ -264,8 +270,11 @@ final class MarkdownMathTests: XCTestCase {
         let latex = #"\bbox[blue]{cachedTranscriptRegression}"#
         let source = "$$\(latex)$$"
         _ = TranscriptAttributedStringBuilder.attributedString(for: source)
+        let updated = expectation(forNotification: MarkdownMath.mathJaxUpdated, object: nil) {
+            ($0.object as? [String])?.contains(latex) == true
+        }
         MarkdownMath.mathJaxCompleted(latex: latex, display: true, svg: #"<svg xmlns="http://www.w3.org/2000/svg" width="2ex" height="2ex" viewBox="0 0 10 10"><rect width="10" height="10" fill="currentColor"/></svg>"#)
-        try await Task.sleep(for: .milliseconds(150))
+        await fulfillment(of: [updated], timeout: 3)
         let rendered = TranscriptAttributedStringBuilder.attributedString(for: source)
         XCTAssertNotEqual((rendered.string as NSString).range(of: "\u{FFFC}").location, NSNotFound)
     }
