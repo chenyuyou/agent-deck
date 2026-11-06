@@ -652,7 +652,7 @@ final class PiAgentSessionStore {
         let now = Date()
         let snapshot = parentTranscriptPlainText(parentID: parent.id, cutBeforeEntryID: cutBeforeEntryID)
         let title = "Fork of \(parent.title)"
-        let record = PiAgentSessionRecord(
+        var record = PiAgentSessionRecord(
             id: UUID(),
             kind: .project,
             title: title,
@@ -707,6 +707,7 @@ final class PiAgentSessionStore {
             createdAt: now,
             updatedAt: now
         )
+        record.memoryPolicy = parent.memoryPolicy
         sessions.insert(record, at: 0)
         sessionsTouchedThisRun.insert(record.id)
         sortSessions()

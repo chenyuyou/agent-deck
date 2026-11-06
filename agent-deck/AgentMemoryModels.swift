@@ -79,10 +79,12 @@ nonisolated struct AgentMemoryRecord: Identifiable, Codable, Hashable, Sendable 
     var useCount: Int
     var tags: [String]
 
+    var userLocked: Bool? = nil
+    var isUserLocked: Bool { userLocked == true }
     var isInjectable: Bool { status.isInjectable }
 }
 
-struct AgentMemoryDocument: Hashable {
+nonisolated struct AgentMemoryDocument: Codable, Hashable {
     var record: AgentMemoryRecord
     var body: String
 }
@@ -176,4 +178,17 @@ struct AgentMemoryStaleBridgeRequest: Codable, Hashable {
 struct AgentMemorySearchBridgeRequest: Codable, Hashable {
     var query: String
     var limit: Int?
+}
+
+nonisolated struct AgentMemoryRevision: Codable, Hashable, Identifiable {
+    var id: UUID
+    var savedAt: Date
+    var source: String
+    var document: AgentMemoryDocument
+}
+
+nonisolated struct PiSessionMemoryPolicy: Codable, Hashable {
+    var enabled: Bool
+    var automaticWrites: Bool
+    var subagentsEnabled: Bool
 }

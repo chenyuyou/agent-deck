@@ -3,6 +3,37 @@ import XCTest
 
 @MainActor
 final class PiAgentBridgeSmokeTests: XCTestCase {
+    func testConfigurationChangesDuringStartupAreNotLostBeforeClientExists() throws {
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiAgentRunnerService(store: store)
+        let session = store.createSession(kind: .project, title: "Starting", project: try PiTestSupport.makeProject(), repository: nil)
+        store.updateSession(session.id) { $0.status = .starting }
+        runner.requestLaunchResourceRelaunch(sessionID: session.id, summary: "Settings changed during startup")
+        XCTAssertTrue(runner.hasPendingConfigurationChange(sessionID: session.id))
+        XCTAssertEqual(store.sessions.first?.status, .starting)
+        runner.stop(sessionID: session.id, recordTranscript: false)
+        XCTAssertFalse(runner.hasPendingConfigurationChange(sessionID: session.id))
+    }
+
+    func testManualMemoryContextQueuesAsFollowUpWithoutSteeringActiveTurn() throws {
+        let harness = try PiTestSupport.makeBridgeHarness(events: [["type": "turn_start"]])
+        defer { harness.restoreEnvironment() }
+        let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
+        let runner = PiAgentRunnerService(store: store)
+        let session = store.createSession(kind: .project, title: "Memory context", project: try PiTestSupport.makeProject(), repository: nil)
+        runner.resume(session: session)
+        defer { runner.stop(sessionID: session.id, recordTranscript: false) }
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 3) {
+            store.transcript(for: session.id).contains { $0.role == .assistant }
+        })
+        XCTAssertTrue(runner.enqueueMemoryContext("User selected memory revision", sessionID: session.id))
+        XCTAssertTrue(PiTestSupport.waitUntil(timeout: 3) {
+            let text = (try? String(contentsOf: harness.stdinLog, encoding: .utf8)) ?? ""
+            return text.contains("User selected memory revision") && text.contains("followUp")
+        })
+        XCTAssertTrue(store.transcript(for: session.id).contains { $0.role == .user && $0.text == "User selected memory revision" })
+    }
+
     func testMessageEndPreservesPendingThinkingWithoutFinalThinkingPayload() throws {
         let harness = try PiTestSupport.makeBridgeHarness(events: [
             ["type": "turn_start"],

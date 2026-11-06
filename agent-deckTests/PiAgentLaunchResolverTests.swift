@@ -5,6 +5,80 @@ import XCTest
 
 final class PiAgentLaunchResolverTests: XCTestCase {
     @MainActor
+    func testSessionAgentsAndMemorySettingsRenderOffscreen() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let memory = AgentMemoryStore(rootURL: root)
+        let viewModel = AppViewModel(memoryStore: memory)
+        let store = viewModel.piAgentSessionStore
+        let project = try PiTestSupport.makeProject()
+        var session = store.createSession(kind: .project, title: "Settings preview", project: project, repository: nil)
+        defer { store.deleteSessions([session.id], fallbackSelectionID: nil) }
+        session.status = .running
+        let record = try memory.createMemory(kind: .decision, status: .active, title: "Use native controls", summary: "Keep controls accessible", body: "Prefer native controls for navigation.", projectPath: project.path)
+        try memory.setUserLocked(id: record.id, locked: true)
+        let fixtures: [(String, AnyView)] = [
+            ("agents", AnyView(PiAgentSessionModelsSheet(viewModel: viewModel, sessionID: session.id))),
+            ("memory", AnyView(PiSessionMemorySettings(viewModel: viewModel, session: session, store: memory).padding(20)))
+        ]
+        for (name, fixture) in fixtures {
+            let host = NSHostingView(rootView: fixture)
+            host.frame = NSRect(x: 0, y: 0, width: 760, height: 640)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            XCTAssertTrue(host.fittingSize.height.isFinite)
+            let image = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: image)
+            let data = try XCTUnwrap(image.representation(using: .png, properties: [:]))
+            try data.write(to: URL(fileURLWithPath: "/tmp/agent-deck-session-settings-\(name).png"))
+            window.close()
+        }
+    }
+
+    @MainActor
+    func testSessionSettingsChangeOnlyTheTargetSession() throws {
+        let memory = AgentMemoryStore(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        let viewModel = AppViewModel(memoryStore: memory)
+        let store = viewModel.piAgentSessionStore
+        let project = try PiTestSupport.makeProject()
+        let target = store.createSession(kind: .project, title: "Target", project: project, repository: nil)
+        let other = store.createSession(kind: .project, title: "Other", project: project, repository: nil)
+        defer { store.deleteSessions([target.id, other.id], fallbackSelectionID: nil) }
+        store.updateSession(target.id) { $0.status = .running }
+        viewModel.setAgentSelection(["explorer", "reviewer"], for: target.id)
+        viewModel.setSubagentsEnabled(false, forSessionID: target.id)
+        viewModel.setSessionMemoryPolicy(.init(enabled: true, automaticWrites: false, subagentsEnabled: false), sessionID: target.id)
+        let changed = try XCTUnwrap(store.sessions.first { $0.id == target.id })
+        XCTAssertEqual(changed.agentSelection, ["explorer", "reviewer"])
+        XCTAssertFalse(changed.subagentsEnabled)
+        XCTAssertEqual(changed.status, .running)
+        XCTAssertEqual(changed.memoryPolicy?.automaticWrites, false)
+        XCTAssertNil(store.sessions.first { $0.id == other.id }?.memoryPolicy)
+        XCTAssertNil(store.sessions.first { $0.id == other.id }?.agentSelection)
+    }
+
+    @MainActor
+    func testManualMemoryRevisionDeduplicationIsSessionScoped() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let memory = AgentMemoryStore(rootURL: root)
+        let viewModel = AppViewModel(memoryStore: memory)
+        let store = viewModel.piAgentSessionStore
+        let project = try PiTestSupport.makeProject()
+        let session = store.createSession(kind: .project, title: "Memory", project: project, repository: nil)
+        defer { store.deleteSessions([session.id], fallbackSelectionID: nil) }
+        let record = try memory.createMemory(kind: .context, status: .active, title: "Selected", summary: "", body: "Current revision", projectPath: project.path)
+        store.updateSession(session.id) {
+            $0.memoryPolicy = .init(enabled: true, automaticWrites: true, subagentsEnabled: true)
+            $0.manuallyIncludedMemoryVersions = [record.id: record.updatedAt]
+        }
+        XCTAssertEqual(try viewModel.includeMemoriesInSession([record.id], sessionID: session.id), 0)
+        store.updateSession(session.id) { $0.memoryPolicy?.enabled = false }
+        XCTAssertThrowsError(try viewModel.includeMemoriesInSession([record.id], sessionID: session.id))
+    }
+
+    @MainActor
     func testRunningSessionModelEditorUpdatesSessionWithoutChangingActiveState() throws {
         let viewModel = AppViewModel()
         let store = viewModel.piAgentSessionStore

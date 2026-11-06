@@ -109,7 +109,7 @@ struct PiAgentStartupResourcesPopover: View {
                         resourceSection("Agents", icon: "paperplane", items: agentItems, columns: 1, showsDetails: true)
                         if !session.isNoProject && session.subagentsEnabled {
                             Button { isAgentModelsPresented = true } label: {
-                                Label("Configure agent models", systemImage: "slider.horizontal.3")
+                                Label("Session settings", systemImage: "slider.horizontal.3")
                             }
                             .appSmallSecondaryButton()
                         }
@@ -492,24 +492,117 @@ struct PiAgentSessionModelsSheet: View {
     var viewModel: AppViewModel
     let sessionID: UUID
     @Environment(\.dismiss) private var dismiss
+    @State private var tab = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Agent models").font(.title2)
-            Text("Saved to this session. Changes apply when an agent is next launched or continued; running agents keep their current model.")
-                .font(.callout)
-                .foregroundStyle(AppTheme.mutedText)
+            Text("Session settings").font(.title2)
+            Text("Saved to this session. Running agents finish with their current configuration; new launches use the updated settings.")
+                .font(.caption).foregroundStyle(AppTheme.mutedText)
+            Picker("Settings", selection: $tab) {
+                Text("Agents").tag(0)
+                Text("Memory").tag(1)
+            }.pickerStyle(.segmented)
             if let session = viewModel.piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) {
-                PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session, modelEditingOnly: true)
+                Label(viewModel.sessionConfigurationPending(sessionID)
+                      ? "Saved — waiting for the current execution to finish"
+                      : "Saved — configuration applies to subsequent launches",
+                      systemImage: "checkmark.circle")
+                    .font(.caption).foregroundStyle(AppTheme.mutedText)
+                if tab == 0 {
+                    if session.isAgentBound || session.isNoProject {
+                        Text("Deck agent delegation requires a project session without a direct agent binding.")
+                    } else {
+                        ScrollView {
+                            PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session, sessionConfigurationMode: true)
+                        }
+                    }
+                } else {
+                    PiSessionMemorySettings(viewModel: viewModel, session: session, store: viewModel.agentMemoryStore)
+                }
+            } else {
+                Text("This session was deleted.")
             }
+            Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 760)
+        .frame(width: 760, height: 640)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
             }
         }
+    }
+}
+
+struct PiSessionMemorySettings: View {
+    var viewModel: AppViewModel
+    let session: PiAgentSessionRecord
+    @ObservedObject var store: AgentMemoryStore
+    @State private var selection: Set<String> = []
+    @State private var query = ""
+    @State private var editingID: String?
+    @State private var feedback: String?
+
+    private var policy: PiSessionMemoryPolicy { viewModel.sessionMemoryPolicy(session) }
+    private var records: [AgentMemoryRecord] {
+        store.records(projectPath: session.projectPathForProjectFeatures).filter {
+            query.isEmpty || ($0.title + " " + $0.summary).localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if session.isNoProject {
+                Text("Memory is project-scoped. Select a project-backed session to manage it.")
+            } else {
+                Toggle("Enable Memory for this session", isOn: binding(\.enabled))
+                Toggle("Allow agents to save and adjust memories", isOn: binding(\.automaticWrites)).disabled(!policy.enabled)
+                Toggle("Allow Deck agents to use Memory", isOn: binding(\.subagentsEnabled)).disabled(!policy.enabled)
+                Text("Turning Memory off stops future recall and automatic writes. Previously loaded context remains in conversation history.")
+                    .font(.caption).foregroundStyle(AppTheme.mutedText)
+                Text("Project: " + session.projectPath).font(.caption).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+                TextField("Search project memories", text: $query)
+                List(records) { record in
+                    HStack(alignment: .top) {
+                        Toggle(isOn: Binding(get: { selection.contains(record.id) }, set: { value in
+                            if value { selection.insert(record.id) } else { selection.remove(record.id) }
+                        })) { Text(record.title) }.disabled(!record.isInjectable)
+                        Spacer()
+                        if record.isUserLocked { Label("Locked", systemImage: "lock.fill").font(.caption) }
+                        if (session.recalledMemoryIDs ?? []).contains(record.id) {
+                            Label(session.manuallyIncludedMemoryVersions?[record.id] == record.updatedAt ? "Revision added" : "Loaded earlier", systemImage: "tray.and.arrow.down").font(.caption)
+                        }
+                        Button("View / Edit") { editingID = record.id }
+                    }
+                    Text(record.filePath).font(.caption2).foregroundStyle(AppTheme.mutedText).textSelection(.enabled)
+                }
+                HStack {
+                    Button("Add / update selected memories") {
+                        do {
+                            let count = try viewModel.includeMemoriesInSession(selection, sessionID: session.id)
+                            feedback = count == 0 ? "These revisions are already included." : "Added \(count) memory revisions as a visible follow-up."
+                            selection.removeAll()
+                        } catch { feedback = error.localizedDescription }
+                    }.disabled(!policy.enabled || selection.isEmpty || session.status == .starting)
+                    Spacer()
+                }
+                Text("Adding memory sends a visible follow-up and starts the next response. Running turns finish first. Editing the library alone does not update this conversation.")
+                    .font(.caption).foregroundStyle(AppTheme.mutedText)
+                if let feedback { Text(feedback).font(.caption).textSelection(.enabled) }
+            }
+        }
+        .sheet(isPresented: Binding(get: { editingID != nil }, set: { if !$0 { editingID = nil } })) {
+            if let editingID { SessionMemoryManagementSheet(viewModel: viewModel, memoryID: editingID, store: store) }
+        }
+    }
+
+    private func binding(_ field: WritableKeyPath<PiSessionMemoryPolicy, Bool>) -> Binding<Bool> {
+        Binding(get: { policy[keyPath: field] }, set: { value in
+            var changed = policy
+            changed[keyPath: field] = value
+            viewModel.setSessionMemoryPolicy(changed, sessionID: session.id)
+        })
     }
 }
 
@@ -519,6 +612,7 @@ struct PiAgentSessionSubagentPickerCard: View {
     let session: PiAgentSessionRecord
 
     var modelEditingOnly = false
+    var sessionConfigurationMode = false
 
     @State private var isExpanded = false
     @State private var isExpandedContentVisible = false
@@ -722,7 +816,7 @@ struct PiAgentSessionSubagentPickerCard: View {
             // Fade in on cold start: the universe is briefly empty while the
             // first project scan runs, then populates. Softens that handoff.
             return Group {
-                if isHidden {
+                if isHidden && !sessionConfigurationMode {
                     EmptyView()
                 } else {
                     AppRowCard(
@@ -730,13 +824,13 @@ struct PiAgentSessionSubagentPickerCard: View {
                     ) {
                         VStack(alignment: .leading, spacing: 0) {
                             header(data)
-                            if isExpanded, let data {
+                            if isExpanded || sessionConfigurationMode, let data {
                                 expandedContent(data)
                                     .onAppear { acknowledgeStressCard(data: data, expanded: true) }
-                                    .opacity(isExpandedContentVisible ? 1 : 0)
-                                    .offset(y: isExpandedContentVisible ? 0 : -6)
-                                    .allowsHitTesting(isExpandedContentVisible)
-                                    .accessibilityHidden(!isExpandedContentVisible)
+                                    .opacity(isExpandedContentVisible || sessionConfigurationMode ? 1 : 0)
+                                    .offset(y: isExpandedContentVisible || sessionConfigurationMode ? 0 : -6)
+                                    .allowsHitTesting(isExpandedContentVisible || sessionConfigurationMode)
+                                    .accessibilityHidden(!isExpandedContentVisible && !sessionConfigurationMode)
                             }
                         }
                     }
@@ -832,13 +926,17 @@ struct PiAgentSessionSubagentPickerCard: View {
             get: { session.subagentsEnabled },
             set: { newValue in
                 if !newValue { setExpanded(false) }
-                viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
+                if sessionConfigurationMode {
+                    viewModel.setSubagentsEnabled(newValue, forSessionID: session.id)
+                } else {
+                    viewModel.setSubagentsEnabledForSelectedDraftAndNewSessions(newValue)
+                }
             }
         ))
         .appSwitch()
         .labelsHidden()
         .controlSize(.small)
-        .help(session.subagentsEnabled
+        .help(sessionConfigurationMode ? "Applies only to this session; updates after the current execution." : session.subagentsEnabled
             ? "Deck agents are on. Applies to this session and as the default for new sessions"
             : "Deck agents are off. Applies to this session and as the default for new sessions")
     }
@@ -893,7 +991,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         VStack(alignment: .leading, spacing: 0) {
             Divider().padding(.vertical, 10)
             agentList(data)
-            delegationPolicySelector
+            if !sessionConfigurationMode { delegationPolicySelector }
         }
     }
 

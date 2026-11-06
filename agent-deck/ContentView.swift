@@ -417,6 +417,7 @@ struct ContentView: View {
     @State private var showingPiAgentDeleteAlert = false
     @State private var isPiAgentTranscriptOptionsPresented = false
     @State private var isPiAgentStartupResourcesPresented = false
+    @State private var isPiAgentSessionSettingsPresented = false
     @State private var isPiAgentSystemPromptPresented = false
     @State private var isPiAgentSubagentsPopoverPresented = false
     @State private var navigationColumnVisibility: NavigationSplitViewVisibility = .all
@@ -1483,6 +1484,20 @@ struct ContentView: View {
                 PiAgentPlanToolbarButton(store: viewModel.piAgentSessionStore)
 
                 Button {
+                    isPiAgentSessionSettingsPresented = true
+                } label: {
+                    Label("Session settings", systemImage: "slider.horizontal.3")
+                }
+                .toolbarNeutralChrome()
+                .help("Configure this session's Agents and Memory")
+                .disabled(viewModel.piAgentSessionStore.selectedSession == nil)
+                .sheet(isPresented: $isPiAgentSessionSettingsPresented) {
+                    if let session = viewModel.piAgentSessionStore.selectedSession {
+                        PiAgentSessionModelsSheet(viewModel: viewModel, sessionID: session.id)
+                    }
+                }
+
+                Button {
                     isPiAgentStartupResourcesPresented.toggle()
                 } label: {
                     Label("Session Resources", systemImage: "info.circle")
@@ -1617,7 +1632,7 @@ struct ContentView: View {
                 .symbolRenderingMode(.monochrome)
                 .foregroundStyle(viewModel.appSettings.agentMemoryEnabled ? AppTheme.brandAccent : .secondary)
                 .tint(AppTheme.brandAccent)
-                .help(viewModel.appSettings.agentMemoryEnabled ? "Project memory is on. Click to pause." : "Project memory is paused. Click to turn it on.")
+                .help("Memory default for sessions without their own policy. Change an individual session in Session settings.")
 
                 Button {
                     isMemoryInfoPresented.toggle()

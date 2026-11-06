@@ -52,6 +52,44 @@ The current implementation includes:
 
 Memory is not learned by silently scraping every conversation. Agents receive explicit memory tools and a memory policy. When an agent identifies durable project knowledge, it calls the write tool; Agent Deck scans the content, saves the Markdown file, updates the project manifest, and records a transcript card. The vector cache is refreshed lazily on the next recall (staleness is detected by content hash), so writes never block on embedding.
 
+## Session settings and manual control
+
+Open the session toolbar's **Session settings → Memory**. A session can override
+the global default with its own Memory enablement, automatic writes/stale marking,
+and Deck-agent access settings. Existing sessions without a policy continue to
+inherit global defaults. General Chat has no project memory. A fork inherits its
+parent's Memory policy but starts with fresh recall/version tracking.
+
+Tool/launch-policy changes reload Pi at a safe execution boundary; the UI shows a
+pending state while a current execution finishes. Already executing child agents
+keep their process configuration, while Memory tool requests check current session
+policy. Turning Memory off stops future operations; it cannot erase context already
+in the conversation. Searches/writes that await retrieval recheck policy before
+returning context or saving newly created memory.
+
+Select project memories and press **Add / update selected memories** to send their
+current contents as a visible user follow-up. This starts another response (or queues
+one after an active turn); it never steers the current turn. The text identifies each
+memory and revision and tells the agent to supersede earlier revisions of those IDs.
+Selection is limited by the existing injection budget and secret scanner. Re-adding
+the same manually included revision is a no-op. Editing the library alone does not
+update existing conversation context or silently rewrite its original recall snapshot.
+
+Use **View / Edit** in that list, or **Memory → Memory Body → Edit**, for manual edits.
+The editor displays the write target; changing Type migrates the Markdown file to
+the corresponding directory while keeping its ID. Save errors leave the editor open.
+
+**User locked** blocks edits and stale marking through the model's Memory tools;
+manual edits, unlocking, and deletion remain available to the user. This is an app
+Memory-tool protection, not an operating-system file permission or sandbox.
+
+**History and restore** previews previous content, time, and change source. Content,
+status, and lock changes save a pre-change revision as JSON under
+`projects/<project-id>/history/<memory-id-hash>/`. Restoring content saves the current
+version too, restores title/summary/body/tags/type, and retains the current user lock
+and status. History is not an undo for user deletion and starts with changes made by
+this version. Updated document/manifest commits roll back the body on manifest failure.
+
 ## Storage
 
 By default memory is stored under:
@@ -353,3 +391,6 @@ Agent Deck Memory is architecturally inspired by:
 - `unipi` by Neuron-Mr-White: SQLite/vector direction and broader context-management patterns.
 
 Agent Deck does not bundle or depend on these packages.
+
+Failed status or delete operations display an error and retain the memory in the list.
+Bulk deletion stops at the first failed deletion so remaining memories are preserved.

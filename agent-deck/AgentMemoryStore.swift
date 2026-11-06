@@ -4,6 +4,7 @@ import os
 
 enum AgentMemoryError: LocalizedError {
     case secretDetected(String)
+    case locked
     case missingProject
     case missingRecord(String)
 
@@ -11,6 +12,8 @@ enum AgentMemoryError: LocalizedError {
         switch self {
         case let .secretDetected(reason):
             return "Memory was not saved because it appears to contain sensitive data: \(reason)"
+        case .locked:
+            return "This memory is locked by the user. Only a user can edit or unlock it."
         case .missingProject:
             return "Memory is project-only. Select a project before saving or recalling memories."
         case let .missingRecord(id):
@@ -206,49 +209,160 @@ final class AgentMemoryStore: ObservableObject {
             tags: tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         )
         try write(document: AgentMemoryDocument(record: record, body: body), to: fileURL)
+        do {
+            let updated = [record] + records(projectPath: projectPath)
+            try Self.encoder.encode(updated).write(to: projectDirectoryURL(projectPath: projectPath).appendingPathComponent("manifest.json"), options: .atomic)
+        } catch {
+            try? fileManager.removeItem(at: fileURL)
+            throw error
+        }
         records.insert(record, at: 0)
         sortRecords()
-        saveManifest(for: projectPath)
+        revision &+= 1
         return record
     }
 
     /// `reactivateIfStale` is set by the agent upsert path: an agent updating a
     /// stale memory is asserting the fact is current again, so it returns to the
     /// injectable pool. UI edits leave status alone.
-    func updateMemory(id: String, title: String, summary: String, body: String, tags: [String], reactivateIfStale: Bool = false) throws {
+    func updateMemory(id: String, title: String, summary: String, body: String, tags: [String], reactivateIfStale: Bool = false, kind: AgentMemoryKind? = nil, byAgent: Bool = false) throws {
         guard let index = records.firstIndex(where: { $0.id == id }) else { throw AgentMemoryError.missingRecord(id) }
         if let finding = scanner.findSecret(in: title + "\n" + summary + "\n" + body) {
             throw AgentMemoryError.secretDetected(finding)
         }
         var record = records[index]
+        if byAgent && record.isUserLocked { throw AgentMemoryError.locked }
+        try saveRevision(for: record, source: byAgent ? "Agent edit" : "User edit")
+        if let kind, kind != record.kind, let projectPath = record.projectPath {
+            record.kind = kind
+            record.filePath = documentURL(id: record.id, kind: kind, projectPath: projectPath).path
+        }
         record.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         record.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         record.tags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         if reactivateIfStale, record.status == .stale { record.status = .active }
         record.updatedAt = Date()
-        try write(document: AgentMemoryDocument(record: record, body: body), to: URL(fileURLWithPath: record.filePath))
+        try commitUpdate(record, body: body)
+
+    }
+
+    @discardableResult
+    func setStatus(id: String, status: AgentMemoryStatus) -> Bool {
+        do {
+            try changeStatus(id: id, status: status, byAgent: false)
+            lastError = nil
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    func clearError() { lastError = nil }
+
+    func changeStatus(id: String, status: AgentMemoryStatus, byAgent: Bool) throws {
+        guard let index = records.firstIndex(where: { $0.id == id }) else { throw AgentMemoryError.missingRecord(id) }
+        var record = records[index]
+        if byAgent && record.isUserLocked { throw AgentMemoryError.locked }
+        guard record.status != status else { return }
+        try saveRevision(for: record, source: byAgent ? "Agent status change" : "User status change")
+        record.status = status
+        record.updatedAt = Date()
+        let body = try readBody(from: URL(fileURLWithPath: record.filePath))
+        try commitUpdate(record, body: body)
+    }
+
+    func setUserLocked(id: String, locked: Bool) throws {
+        guard let index = records.firstIndex(where: { $0.id == id }) else { throw AgentMemoryError.missingRecord(id) }
+        var record = records[index]
+        guard record.isUserLocked != locked else { return }
+        let body = try readBody(from: URL(fileURLWithPath: record.filePath))
+        try saveRevision(for: record, source: locked ? "User locked" : "User unlocked")
+        record.userLocked = locked
+        record.updatedAt = Date()
+        try commitUpdate(record, body: body)
+    }
+
+    // Publish metadata only after both the document and its manifest have committed.
+    private func commitUpdate(_ record: AgentMemoryRecord, body: String) throws {
+        guard let index = records.firstIndex(where: { $0.id == record.id }), let projectPath = record.projectPath else { throw AgentMemoryError.missingRecord(record.id) }
+        let previous = records[index]
+        let previousBody = try readBody(from: URL(fileURLWithPath: previous.filePath))
+        let newURL = URL(fileURLWithPath: record.filePath)
+        try write(document: .init(record: record, body: body), to: newURL)
+        do {
+            var updatedRecords = records(projectPath: projectPath)
+            if let i = updatedRecords.firstIndex(where: { $0.id == record.id }) { updatedRecords[i] = record }
+            let directory = projectDirectoryURL(projectPath: projectPath)
+            try Self.encoder.encode(updatedRecords).write(to: directory.appendingPathComponent("manifest.json"), options: .atomic)
+        } catch {
+            if newURL.path == previous.filePath {
+                try write(document: .init(record: previous, body: previousBody), to: newURL)
+            } else { try fileManager.removeItem(at: newURL) }
+            throw error
+        }
         records[index] = record
         sortRecords()
-        if let projectPath = record.projectPath {
-            saveManifest(for: projectPath)
-        }
+        revision &+= 1
+        if previous.filePath != newURL.path { try? fileManager.removeItem(atPath: previous.filePath) }
     }
 
-    func setStatus(id: String, status: AgentMemoryStatus) {
-        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
-        records[index].status = status
-        records[index].updatedAt = Date()
-        if let projectPath = records[index].projectPath {
-            saveManifest(for: projectPath)
-        }
+    private func historyDirectory(for record: AgentMemoryRecord) throws -> URL {
+        guard let path = record.projectPath else { throw AgentMemoryError.missingProject }
+        return projectDirectoryURL(projectPath: path).appendingPathComponent("history", isDirectory: true)
+            .appendingPathComponent(Self.projectID(for: record.id), isDirectory: true)
     }
 
-    func deleteMemory(id: String) {
-        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
-        let record = records.remove(at: index)
-        try? fileManager.removeItem(at: URL(fileURLWithPath: record.filePath))
-        if let projectPath = record.projectPath {
-            saveManifest(for: projectPath)
+    private func saveRevision(for record: AgentMemoryRecord, source: String) throws {
+        let directory = try historyDirectory(for: record)
+        let body = try readBody(from: URL(fileURLWithPath: record.filePath))
+        let revision = AgentMemoryRevision(id: UUID(), savedAt: Date(), source: source, document: .init(record: record, body: body))
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Self.encoder.encode(revision).write(to: directory.appendingPathComponent(revision.id.uuidString + ".json"), options: .atomic)
+    }
+
+    func history(for record: AgentMemoryRecord) throws -> [AgentMemoryRevision] {
+        let directory = try historyDirectory(for: record)
+        guard fileManager.fileExists(atPath: directory.path) else { return [] }
+        return try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+            .map { try Self.decoder.decode(AgentMemoryRevision.self, from: Data(contentsOf: $0)) }
+            .sorted { $0.savedAt > $1.savedAt }
+    }
+
+    func restoreRevision(_ revisionID: UUID, for id: String) throws {
+        guard let record = records.first(where: { $0.id == id }),
+              let revision = try history(for: record).first(where: { $0.id == revisionID }) else { throw AgentMemoryError.missingRecord(id) }
+        let old = revision.document
+        try updateMemory(id: id, title: old.record.title, summary: old.record.summary,
+                         body: old.body, tags: old.record.tags, kind: old.record.kind)
+    }
+
+    @discardableResult
+    func deleteMemory(id: String) -> Bool {
+        guard let index = records.firstIndex(where: { $0.id == id }),
+              let projectPath = records[index].projectPath else { return false }
+        let record = records[index]
+        let manifest = projectDirectoryURL(projectPath: projectPath).appendingPathComponent("manifest.json")
+        do {
+            let previous = try Data(contentsOf: manifest)
+            let remaining = records(projectPath: projectPath).filter { $0.id != id }
+            try Self.encoder.encode(remaining).write(to: manifest, options: .atomic)
+            do {
+                if fileManager.fileExists(atPath: record.filePath) {
+                    try fileManager.removeItem(atPath: record.filePath)
+                }
+            } catch {
+                try previous.write(to: manifest, options: .atomic)
+                throw error
+            }
+            records.remove(at: index)
+            revision &+= 1
+            lastError = nil
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
         }
     }
 
@@ -724,6 +838,7 @@ final class AgentMemoryStore: ObservableObject {
         type: \(record.kind.rawValue)
         scope: project
         status: \(record.status.rawValue)
+        userLocked: \(record.isUserLocked)
         title: \(record.title)
         summary: \(record.summary)
         createdAt: \(Self.isoDate.string(from: record.createdAt))
@@ -747,7 +862,7 @@ final class AgentMemoryStore: ObservableObject {
         return String(text[end.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func documentURL(id: String, kind: AgentMemoryKind, projectPath: String) -> URL {
+    func documentURL(id: String, kind: AgentMemoryKind, projectPath: String) -> URL {
         projectDirectoryURL(projectPath: projectPath)
             .appendingPathComponent(directoryName(for: kind), isDirectory: true)
             .appendingPathComponent("\(id).md")

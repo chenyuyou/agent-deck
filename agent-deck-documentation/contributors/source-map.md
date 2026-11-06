@@ -61,3 +61,13 @@ Use this file to quickly find the source of a behavior.
 - `agent-deck/GitHubSearchService.swift` — issue board search
 - `agent-deck/GitHubIssueService.swift` — issue details/comments/relationships/actions
 - `agent-deck/GitRepositoryService.swift` — git status/diff/stage/commit/push
+
+## Session configuration and manual Memory
+
+- `PiAgentStartupViews.swift`: session settings sheet, agent selection/model controls, and project memory selection.
+- `ContentView.swift`: direct Session settings toolbar entry.
+- `PiAgentSessionModels.swift`: optional session Memory policy and manually included revision timestamps (legacy defaults remain supported).
+- `AppViewModel.swift`: policy/tool guards, explicit memory inclusion, and safe launch-resource synchronization.
+- `PiAgentRunnerService.swift`: deferred configuration restart and non-steering Memory follow-ups.
+- `AgentMemoryModels.swift`, `AgentMemoryStore.swift`: optional user lock, pre-change revisions, restore, Type migration, and document/manifest commit rollback.
+- `AgentMemoryViews.swift`: shared manual editor, lock controls, history preview, and error reporting.

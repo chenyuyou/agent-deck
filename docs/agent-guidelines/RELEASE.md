@@ -59,9 +59,9 @@ bash scripts/test-package-signing.sh
 ## Fork version and update channel
 
 This fork publishes from `chenyuyou/agent-deck`, with local marketing version
-1.0.1 and build 17. Its update feed is the latest GitHub release's `appcast.xml`
+1.0.1 and build 18. Its update feed is the latest GitHub release's `appcast.xml`
 asset; preview releases do not advance the stable Sparkle channel. CI uses build
-numbers `1000000 + GITHUB_RUN_NUMBER` so its first release supersedes local build 17.
+numbers `1000000 + GITHUB_RUN_NUMBER` so its first release supersedes local build 18.
 
 Configure repository variable `SPARKLE_PUBLIC_KEY` and the matching secret
 `SPARKLE_PRIVATE_KEY`, along with the existing Developer ID and notarization

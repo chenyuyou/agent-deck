@@ -55,14 +55,23 @@ saved even when the final message omits it or arrives before the next batch.
 These behaviors are implemented in `PiAgentRunnerService.swift` and covered by
 the fake-Pi streaming and reload tests in `PiAgentBridgeSmokeTests.swift`.
 
-## Per-session agent models
+## Runtime session settings
 
-After a session starts, open **Session resources → Configure agent models** to
-change each selected Deck agent's model and thinking level. Changes are saved
-immediately to that session's launch overrides and apply to subsequent agent
-launches or continuations. Queued graph tasks read the latest session settings
-when their launch begins. An agent already executing keeps its current model.
-The controls also support restoring agent defaults or choosing Pi defaults.
+Open **Session settings** (sliders icon) in the session toolbar for **Agents** and
+**Memory**. A project-backed, unbound session can enable Deck agents, select/remove
+agents, choose additional catalog agents, and adjust each model/thinking override
+without changing global defaults or bundled resources. Reset restores project defaults.
+General Chat and directly bound 1:1 sessions do not expose delegation controls.
+
+Agent availability/catalog changes reload the parent Pi process after its current
+execution finishes, so its tool/prompt catalog sees the selection. Running child
+agents finish with their original configuration; queued jobs resolve the latest session
+at launch and report an unavailable-agent error if their agent was removed. New child
+launches and continuations use the current model/thinking overrides. Configuration
+changes made during startup are retained for the next safe restart too.
+
+The Memory tab provides session-level policy, manual memory inclusion, and links to
+editing/locking/history; see [Memory](../memory.md#session-settings-and-manual-control).
 
 ## Important distinction: subagents
 

@@ -45,6 +45,32 @@ final class PiAgentSessionStoreTests: XCTestCase {
         wait(for: [changed], timeout: 0.1)
     }
 
+    func testSessionMemoryPolicyAndManualVersionsPersistAndFork() async throws {
+        let file = PiTestSupport.temporaryStateFile()
+        let store = PiAgentSessionStore(fileURL: file)
+        let session = store.createSession(kind: .project, title: "Memory policy", project: try PiTestSupport.makeProject(), repository: nil)
+        let timestamp = Date(timeIntervalSince1970: 123)
+        let policy = PiSessionMemoryPolicy(enabled: true, automaticWrites: false, subagentsEnabled: false)
+        store.updateSession(session.id) {
+            $0.memoryPolicy = policy
+            $0.manuallyIncludedMemoryVersions = ["memory-1": timestamp]
+        }
+        store.flushForTesting()
+        let restored = PiAgentSessionStore(fileURL: file)
+        await restored.waitForLoadForTesting()
+        let loaded = try XCTUnwrap(restored.sessions.first { $0.id == session.id })
+        let fork = restored.forkSession(from: loaded, newPiSessionFile: "/tmp/session-memory-fork.jsonl", newPiSessionId: nil, composerSeed: "")
+        XCTAssertEqual(fork.memoryPolicy, policy)
+        XCTAssertNil(fork.manuallyIncludedMemoryVersions)
+        XCTAssertEqual(loaded.memoryPolicy, policy)
+        XCTAssertEqual(loaded.manuallyIncludedMemoryVersions, ["memory-1": timestamp])
+        XCTAssertEqual(loaded.effectiveMemoryPolicy(defaultEnabled: false, defaultSubagents: true), policy)
+        var legacy = loaded
+        legacy.memoryPolicy = nil
+        XCTAssertFalse(legacy.effectiveMemoryPolicy(defaultEnabled: false, defaultSubagents: true).enabled)
+        XCTAssertTrue(legacy.effectiveMemoryPolicy(defaultEnabled: true, defaultSubagents: false).enabled)
+    }
+
     func testComposerDraftsRemainScopedToTheirSessionForStoreLifetime() throws {
         let store = PiAgentSessionStore(fileURL: PiTestSupport.temporaryStateFile())
         let project = try PiTestSupport.makeProject()

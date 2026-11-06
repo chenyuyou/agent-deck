@@ -128,7 +128,8 @@ final class PiSubagentRunService {
                 bridgeWarnings.append("contact_supervisor was requested, but \(AppBrand.displayName) could not write the child bridge extension.")
             }
         }
-        let memoryExtensionURL = AppSettingsStore.shared.settings.agentMemoryEnabled ? try? PiNativeSubagentBridgeExtensions.memoryExtensionURL() : nil
+        let memoryPolicy = parentSession.effectiveMemoryPolicy(defaultEnabled: AppSettingsStore.shared.settings.agentMemoryEnabled, defaultSubagents: AppSettingsStore.shared.settings.agentMemorySubagentsEnabled)
+        let memoryExtensionURL = (memoryPolicy.enabled && memoryPolicy.subagentsEnabled) ? try? PiNativeSubagentBridgeExtensions.memoryExtensionURL() : nil
         // Resolved up front (before --tools) so a restrictive agent allowlist can
         // include the `mcp` tool when the bridge is injected; the args themselves are
         // appended below, before the user extensions.

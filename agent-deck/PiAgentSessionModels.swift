@@ -995,6 +995,8 @@ nonisolated struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
     /// is decided by the global setting at process start. Drives the resources
     /// popover's Memory section, mirroring `subagentsEnabled` for Deck agents.
     var memoryEnabled: Bool
+    var memoryPolicy: PiSessionMemoryPolicy? = nil
+    var manuallyIncludedMemoryVersions: [String: Date]? = nil
     var agentSelection: Set<String>?
     /// Per-parent-session child launch overrides. These never modify agent or
     /// settings files and are applied only when a future child is launched.
@@ -1111,7 +1113,7 @@ nonisolated struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
         case finalSystemPrompt, finalSystemPromptCapturedAt
         case pendingSteeringMessages, pendingFollowUpMessages, subagentsEnabled, memoryEnabled, agentSelection, agentLaunchOverrides, injectedExtensions, agentName, noProjectMode, isCompacting, isTitleUserEdited, pinnedAt, createdAt, updatedAt
         case forkedFromSessionID, forkedFromParentTitle, forkedFromUserMessageText, forkedFromTranscriptSnapshot
-        case recalledMemoryPrompt, recalledMemoryIDs, memoryRecallCompleted
+        case recalledMemoryPrompt, recalledMemoryIDs, memoryRecallCompleted, memoryPolicy, manuallyIncludedMemoryVersions
     }
 
     init(
@@ -1311,6 +1313,8 @@ nonisolated struct PiAgentSessionRecord: Identifiable, Codable, Hashable {
             updatedAt: try container.decode(Date.self, forKey: .updatedAt),
             ownedPiSessionFiles: try container.decodeIfPresent([String].self, forKey: .ownedPiSessionFiles)
         )
+        memoryPolicy = try container.decodeIfPresent(PiSessionMemoryPolicy.self, forKey: .memoryPolicy)
+        manuallyIncludedMemoryVersions = try container.decodeIfPresent([String: Date].self, forKey: .manuallyIncludedMemoryVersions)
     }
 }
 
@@ -1834,5 +1838,12 @@ nonisolated enum JSONValue: Codable, Hashable, Sendable {
             return .object(dict.compactMapValues { JSONValue.fromFoundation($0) })
         }
         return nil
+    }
+}
+
+extension PiAgentSessionRecord {
+    func effectiveMemoryPolicy(defaultEnabled: Bool, defaultSubagents: Bool) -> PiSessionMemoryPolicy {
+        guard !isNoProject else { return .init(enabled: false, automaticWrites: false, subagentsEnabled: false) }
+        return memoryPolicy ?? .init(enabled: defaultEnabled, automaticWrites: true, subagentsEnabled: defaultSubagents)
     }
 }

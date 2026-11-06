@@ -38,8 +38,12 @@ struct MemoryScreen: View {
                 initialBody: "",
                 initialKind: .context,
                 initialTags: "",
+                writeTarget: { kind in
+                    guard let project = viewModel.selectedProjectPath else { return "Select a project first" }
+                    return memoryStore.documentURL(id: "new-memory", kind: kind, projectPath: project).deletingLastPathComponent().path + "/ (new memory file)"
+                },
                 onSave: { title, summary, body, kind, tags in
-                    viewModel.createAgentMemory(title: title, summary: summary, body: body, kind: kind, tags: tags)
+                    try viewModel.createAgentMemory(title: title, summary: summary, body: body, kind: kind, tags: tags)
                 }
             )
         }
@@ -64,6 +68,14 @@ struct MemoryScreen: View {
         } message: {
             let count = staleVisibleCount
             Text("Delete \(count) stale memor\(count == 1 ? "y" : "ies")? The memory files are removed from disk.")
+        }
+        .alert("Memory Change Failed", isPresented: Binding(
+            get: { memoryStore.lastError != nil },
+            set: { if !$0 { memoryStore.clearError() } }
+        )) {
+            Button("OK") { memoryStore.clearError() }
+        } message: {
+            Text(memoryStore.lastError ?? "Could not save the change.")
         }
         .task(id: cacheKey) { recomputeCachedLayout() }
         .task {
@@ -149,10 +161,10 @@ struct MemoryScreen: View {
 
     private func deleteStaleMemories() {
         for record in cachedLayout.visible where record.status == .stale {
+            guard viewModel.deleteAgentMemory(record.id) else { break }
             if selectedRecordID == record.id {
                 selectedRecordID = nil
             }
-            viewModel.deleteAgentMemory(record.id)
         }
     }
 
@@ -297,11 +309,10 @@ struct MemoryScreen: View {
     }
 
     private func deleteMemory(_ record: AgentMemoryRecord) {
-        if selectedRecordID == record.id {
+        recordPendingDeletion = nil
+        if viewModel.deleteAgentMemory(record.id), selectedRecordID == record.id {
             selectedRecordID = nil
         }
-        recordPendingDeletion = nil
-        viewModel.deleteAgentMemory(record.id)
     }
 }
 
@@ -380,6 +391,8 @@ private struct MemoryDetailView: View {
     /// Body markdown loaded off the render path. `document(for:)` reads the
     /// file from disk, so it runs in `.task(id:)` rather than in `body`.
     @State private var bodyText = ""
+    @State private var bodyLoaded = false
+    @State private var loadError: String?
 
     var body: some View {
         AppPage(record.title.isEmpty ? "Untitled Memory" : record.title, lazy: true) {
@@ -406,8 +419,11 @@ private struct MemoryDetailView: View {
                     }
                     .appSmallSecondaryButton()
                     .help("Edit memory")
+                    .disabled(!bodyLoaded)
                 }
             )
+
+            MemoryProtectionControls(store: memoryStore, memoryID: record.id)
 
             AppCard(title: "Delete Memory") {
                 VStack(alignment: .leading, spacing: 12) {
@@ -425,8 +441,16 @@ private struct MemoryDetailView: View {
             }
         }
         .task(id: "\(record.id)|\(record.updatedAt.timeIntervalSinceReferenceDate)") {
-            bodyText = memoryStore.document(for: record).body
+            bodyLoaded = false
+            do {
+                _ = try String(contentsOfFile: record.filePath, encoding: .utf8)
+                bodyText = memoryStore.document(for: record).body
+                bodyLoaded = true
+            } catch { loadError = error.localizedDescription }
         }
+        .alert("Memory could not be loaded", isPresented: Binding(get: { loadError != nil }, set: { if !$0 { loadError = nil } })) {
+            Button("OK") { loadError = nil }
+        } message: { Text(loadError ?? "") }
         .sheet(isPresented: $isEditing) {
             MemoryEditorSheet(
                 title: "Edit Memory",
@@ -435,9 +459,12 @@ private struct MemoryDetailView: View {
                 initialBody: bodyText,
                 initialKind: record.kind,
                 initialTags: record.tags.joined(separator: ", "),
+                writeTarget: { kind in
+                    guard let project = record.projectPath else { return record.filePath }
+                    return memoryStore.documentURL(id: record.id, kind: kind, projectPath: project).path
+                },
                 onSave: { title, summary, body, kind, tags in
-                    _ = kind
-                    viewModel.updateAgentMemory(id: record.id, title: title, summary: summary, body: body, tags: tags)
+                    try viewModel.updateAgentMemory(id: record.id, title: title, summary: summary, body: body, tags: tags, kind: kind)
                 }
             )
         }
@@ -479,7 +506,8 @@ private struct MemoryEditorSheet: View {
     let initialBody: String
     let initialKind: AgentMemoryKind
     let initialTags: String
-    let onSave: (String, String, String, AgentMemoryKind, [String]) -> Void
+    let writeTarget: ((AgentMemoryKind) -> String)?
+    let onSave: (String, String, String, AgentMemoryKind, [String]) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var memoryTitle: String
     @State private var summary: String
@@ -487,13 +515,14 @@ private struct MemoryEditorSheet: View {
     @State private var kind: AgentMemoryKind
     @State private var tags: String
 
-    init(title: String, initialTitle: String, initialSummary: String, initialBody: String, initialKind: AgentMemoryKind, initialTags: String, onSave: @escaping (String, String, String, AgentMemoryKind, [String]) -> Void) {
+    init(title: String, initialTitle: String, initialSummary: String, initialBody: String, initialKind: AgentMemoryKind, initialTags: String, writeTarget: ((AgentMemoryKind) -> String)? = nil, onSave: @escaping (String, String, String, AgentMemoryKind, [String]) throws -> Void) {
         self.title = title
         self.initialTitle = initialTitle
         self.initialSummary = initialSummary
         self.initialBody = initialBody
         self.initialKind = initialKind
         self.initialTags = initialTags
+        self.writeTarget = writeTarget
         self.onSave = onSave
         _memoryTitle = State(initialValue: initialTitle)
         _summary = State(initialValue: initialSummary)
@@ -501,6 +530,8 @@ private struct MemoryEditorSheet: View {
         _kind = State(initialValue: initialKind)
         _tags = State(initialValue: initialTags)
     }
+
+    @State private var saveError: String?
 
     var body: some View {
         // Mirrors the `MarkdownFileEditorSheet` chrome: compact headline header
@@ -519,6 +550,11 @@ private struct MemoryEditorSheet: View {
                 Spacer()
             }
             .padding(18)
+
+            if let writeTarget {
+                Text("Save to: " + writeTarget(kind)).font(.caption).foregroundStyle(AppTheme.mutedText)
+                    .textSelection(.enabled).padding(.horizontal, 18).padding(.bottom, 10)
+            }
 
             Divider()
 
@@ -564,8 +600,10 @@ private struct MemoryEditorSheet: View {
                 Button("Cancel") { dismiss() }
                     .appSecondaryButton()
                 Button("Save") {
-                    onSave(memoryTitle.trimmedForMemory, summary.trimmedForMemory, bodyText, kind, parsedTags)
-                    dismiss()
+                    do {
+                        try onSave(memoryTitle.trimmedForMemory, summary.trimmedForMemory, bodyText, kind, parsedTags)
+                        dismiss()
+                    } catch { saveError = error.localizedDescription }
                 }
                 .appPrimaryButton()
                 .keyboardShortcut(.defaultAction)
@@ -574,6 +612,9 @@ private struct MemoryEditorSheet: View {
             .padding(16)
         }
         .frame(width: 760, height: 620)
+        .alert("Memory was not saved", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK") { saveError = nil }
+        } message: { Text(saveError ?? "") }
     }
 
     private var parsedTags: [String] {
@@ -710,5 +751,103 @@ private extension AgentMemoryStatus {
 private extension String {
     var trimmedForMemory: String {
         trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct MemoryProtectionControls: View {
+    @ObservedObject var store: AgentMemoryStore
+    let memoryID: String
+    @State private var revisions: [AgentMemoryRevision] = []
+    @State private var showsHistory = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        if let record = store.records.first(where: { $0.id == memoryID }) {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("User locked — agents cannot edit or mark stale", isOn: Binding(
+                    get: { record.isUserLocked },
+                    set: { value in perform { try store.setUserLocked(id: record.id, locked: value) } }
+                ))
+                Button { perform { revisions = try store.history(for: record); showsHistory = true } } label: {
+                    Label("History and restore", systemImage: "clock.arrow.circlepath")
+                }
+                Text("Project memory file: " + record.filePath)
+                    .font(.caption).foregroundStyle(AppTheme.mutedText).textSelection(.enabled)
+            }
+            .sheet(isPresented: $showsHistory) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Memory history").font(.title2)
+                    Text("Restore saves the current content as another revision. The current user lock is retained.").font(.caption)
+                    List(revisions) { revision in
+                        DisclosureGroup {
+                            Text(revision.document.body).textSelection(.enabled)
+                            Button("Restore this revision") {
+                                perform {
+                                    try store.restoreRevision(revision.id, for: memoryID)
+                                    revisions = try store.history(for: record)
+                                    showsHistory = false
+                                }
+                            }
+                        } label: {
+                            Text(revision.savedAt.formatted() + " · " + revision.source + " · " + revision.document.record.title)
+                        }
+                    }
+                    Button("Done") { showsHistory = false }
+                }.padding(20).frame(width: 680, height: 480)
+            }
+            .alert("Memory operation failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK") { errorMessage = nil }
+            } message: { Text(errorMessage ?? "") }
+        }
+    }
+
+    private func perform(_ operation: () throws -> Void) {
+        do { try operation() } catch { errorMessage = error.localizedDescription }
+    }
+}
+
+struct SessionMemoryManagementSheet: View {
+    var viewModel: AppViewModel
+    let memoryID: String
+    @ObservedObject var store: AgentMemoryStore
+    @State private var bodyText: String?
+    @State private var errorMessage: String?
+    @State private var isEditing = false
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let record = store.records.first(where: { $0.id == memoryID }) {
+                Text(record.title).font(.title2)
+                MemoryProtectionControls(store: store, memoryID: memoryID)
+                ScrollView { Text(bodyText ?? "Loading…").textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                HStack {
+                    Button("Edit memory") { isEditing = true }.disabled(bodyText == nil)
+                    Spacer()
+                    Button("Done") { dismiss() }
+                }
+                .task(id: record.updatedAt) {
+                    do {
+                        _ = try String(contentsOfFile: record.filePath, encoding: .utf8)
+                        bodyText = store.document(for: record).body
+                    } catch { errorMessage = error.localizedDescription }
+                }
+                .sheet(isPresented: $isEditing) {
+                    MemoryEditorSheet(title: "Edit Memory", initialTitle: record.title, initialSummary: record.summary,
+                        initialBody: bodyText ?? "", initialKind: record.kind, initialTags: record.tags.joined(separator: ", "), writeTarget: { kind in
+                            guard let project = record.projectPath else { return record.filePath }
+                            return store.documentURL(id: record.id, kind: kind, projectPath: project).path
+                        }) { title, summary, body, kind, tags in
+                        try viewModel.updateAgentMemory(id: memoryID, title: title, summary: summary, body: body, tags: tags, kind: kind)
+                    }
+                }
+            } else {
+                Text("This memory is no longer available.")
+                Button("Done") { dismiss() }
+            }
+        }.padding(20).frame(width: 760, height: 580)
+        .alert("Memory could not be loaded", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: { Text(errorMessage ?? "") }
     }
 }

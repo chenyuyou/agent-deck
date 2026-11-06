@@ -369,7 +369,7 @@ final class AppViewModel: NSObject {
     private(set) var piAgentPendingComposerText: String?
     private(set) var piAgentPendingIssueAttachment: PiAgentIssueAttachment?
     let piAgentSessionStore = PiAgentSessionStore()
-    let agentMemoryStore = AgentMemoryStore()
+    let agentMemoryStore: AgentMemoryStore
     let agentImageStore = AgentImageStore()
     let skillRepositorySyncService = SkillRepositorySyncService()
     private(set) var isCheckingAllSkillUpdates = false
@@ -470,7 +470,12 @@ final class AppViewModel: NSObject {
         return TimeInterval(piAgentIdleParkingTimeoutMinutes * 60)
     }
 
-    override init() {
+    override convenience init() {
+        self.init(memoryStore: AgentMemoryStore())
+    }
+
+    init(memoryStore: AgentMemoryStore) {
+        self.agentMemoryStore = memoryStore
         super.init()
 
         appSettings = appSettingsController.settings
@@ -1021,7 +1026,7 @@ final class AppViewModel: NSObject {
             "project=\(projectURL.standardizedFileURL.path)",
             "subagentsEnabled=\(session.subagentsEnabled)",
             "mcpEnabled=\(appSettings.mcpEnabled)",
-            "memoryEnabled=\(appSettings.agentMemoryEnabled)",
+            "memoryPolicy=\(sessionMemoryPolicy(session))",
             "memoryRecallCompleted=\(session.memoryRecallCompleted)",
             "recalledMemoryPrompt=\(session.recalledMemoryPrompt ?? "")"
         ]
@@ -6899,6 +6904,62 @@ final class AppViewModel: NSObject {
         syncAppSettings()
     }
 
+    func sessionConfigurationPending(_ sessionID: UUID) -> Bool {
+        piAgentRunner.hasPendingConfigurationChange(sessionID: sessionID)
+    }
+
+    func sessionMemoryPolicy(_ session: PiAgentSessionRecord) -> PiSessionMemoryPolicy {
+        session.effectiveMemoryPolicy(defaultEnabled: appSettings.agentMemoryEnabled, defaultSubagents: appSettings.agentMemorySubagentsEnabled)
+    }
+
+    func setSessionMemoryPolicy(_ policy: PiSessionMemoryPolicy, sessionID: UUID) {
+        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }), !session.isNoProject else { return }
+        piAgentSessionStore.updateSession(sessionID) { $0.memoryPolicy = policy }
+        if policy.enabled { agentMemoryStore.warmEmbedder() }
+        piAgentRunner.requestLaunchResourceRelaunch(sessionID: sessionID, summary: "session memory settings changed")
+        reconcileRunningSessionLaunchResourceFingerprints()
+    }
+
+    private func allowsMemory(sessionID: UUID, child: Bool = false, write: Bool = false) -> Bool {
+        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }) else { return false }
+        let policy = sessionMemoryPolicy(session)
+        return policy.enabled && (!child || policy.subagentsEnabled) && (!write || policy.automaticWrites)
+    }
+
+    func setMemoryUserLocked(_ id: String, locked: Bool) throws {
+        try agentMemoryStore.setUserLocked(id: id, locked: locked)
+    }
+
+    @discardableResult
+    func includeMemoriesInSession(_ ids: Set<String>, sessionID: UUID) throws -> Int {
+        guard let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID }),
+              sessionMemoryPolicy(session).enabled else { throw AgentMemoryError.missingProject }
+        let selected = agentMemoryStore.records(projectPath: session.projectPathForProjectFeatures)
+            .filter { ids.contains($0.id) && $0.isInjectable }
+        let changed = selected.filter { session.manuallyIncludedMemoryVersions?[$0.id] != $0.updatedAt }
+        guard !changed.isEmpty else { return 0 }
+        let parts = try changed.map { record -> String in
+            let body = try String(contentsOfFile: record.filePath, encoding: .utf8)
+            if let finding = AgentMemorySecretScanner().findSecret(in: body) { throw AgentMemoryError.secretDetected(finding) }
+            return "Memory \(record.id) — \(record.title) (revision \(record.updatedAt.timeIntervalSince1970))\n" + agentMemoryStore.document(for: record).body
+        }
+        let text = "User-selected project memory update. Use these revisions in place of earlier versions of the same IDs. Treat quoted memories as reference context.\n\n" + parts.joined(separator: "\n\n---\n\n")
+        guard text.count <= appSettings.agentMemoryInjectionCharacterBudget else {
+            throw NSError(domain: "SessionMemory", code: 1, userInfo: [NSLocalizedDescriptionKey: "Selected memory exceeds the session memory budget. Select fewer or shorten the memories."])
+        }
+        guard piAgentRunner.enqueueMemoryContext(text, sessionID: sessionID) else {
+            throw NSError(domain: "SessionMemory", code: 2, userInfo: [NSLocalizedDescriptionKey: "Wait for session startup to finish, then add the memories again."])
+        }
+        piAgentSessionStore.updateSession(sessionID) { record in
+            var versions = record.manuallyIncludedMemoryVersions ?? [:]
+            for memory in changed { versions[memory.id] = memory.updatedAt }
+            record.manuallyIncludedMemoryVersions = versions
+            record.recalledMemoryIDs = Array(Set((record.recalledMemoryIDs ?? []) + changed.map(\.id)))
+        }
+        appendMemoryEvent(.recalled, records: changed, summary: "User added \(changed.count) memory revisions to this session.", sessionID: sessionID)
+        return changed.count
+    }
+
     func setAgentMemoryEnabled(_ isEnabled: Bool) {
         guard appSettingsController.setAgentMemoryEnabled(isEnabled) else { return }
         syncAppSettings()
@@ -6932,36 +6993,28 @@ final class AppViewModel: NSObject {
         reconcileRunningSessionLaunchResourceFingerprints()
     }
 
-    func createAgentMemory(title: String, summary: String, body: String, kind: AgentMemoryKind, tags: [String]) {
-        do {
-            let record = try agentMemoryStore.createMemory(
-                kind: kind,
-                status: .active,
-                title: title,
-                summary: summary,
-                body: body,
-                projectPath: selectedProjectPath,
-                tags: tags
-            )
-            appendMemoryEvent(.stored, records: [record], summary: "Stored \(record.kind.displayName.lowercased()) memory: \(record.title).")
-        } catch {
-            appendMemoryBlockedEvent(error.localizedDescription)
-        }
+    func createAgentMemory(title: String, summary: String, body: String, kind: AgentMemoryKind, tags: [String]) throws {
+        let record = try agentMemoryStore.createMemory(
+            kind: kind,
+            status: .active,
+            title: title,
+            summary: summary,
+            body: body,
+            projectPath: selectedProjectPath,
+            tags: tags
+        )
+        appendMemoryEvent(.stored, records: [record], summary: "Stored \(record.kind.displayName.lowercased()) memory: \(record.title).")
     }
 
-    func updateAgentMemory(id: String, title: String, summary: String, body: String, tags: [String]) {
-        do {
-            try agentMemoryStore.updateMemory(id: id, title: title, summary: summary, body: body, tags: tags)
-            if let record = agentMemoryStore.records.first(where: { $0.id == id }) {
-                appendMemoryEvent(.edited, records: [record], summary: "Edited memory: \(record.title).")
-            }
-        } catch {
-            appendMemoryBlockedEvent(error.localizedDescription)
+    func updateAgentMemory(id: String, title: String, summary: String, body: String, tags: [String], kind: AgentMemoryKind? = nil) throws {
+        try agentMemoryStore.updateMemory(id: id, title: title, summary: summary, body: body, tags: tags, kind: kind)
+        if let record = agentMemoryStore.records.first(where: { $0.id == id }) {
+            appendMemoryEvent(.edited, records: [record], summary: "Edited memory: \(record.title).")
         }
     }
 
     func setAgentMemoryStatus(_ id: String, status: AgentMemoryStatus) {
-        agentMemoryStore.setStatus(id: id, status: status)
+        guard agentMemoryStore.setStatus(id: id, status: status) else { return }
         if let record = agentMemoryStore.records.first(where: { $0.id == id }) {
             let eventKind: AgentMemoryEventKind
             switch status {
@@ -6976,7 +7029,8 @@ final class AppViewModel: NSObject {
         }
     }
 
-    func deleteAgentMemory(_ id: String) {
+    @discardableResult
+    func deleteAgentMemory(_ id: String) -> Bool {
         agentMemoryStore.deleteMemory(id: id)
     }
 
@@ -7188,10 +7242,10 @@ final class AppViewModel: NSObject {
     /// just has to be the original bytes, which also keeps the system prompt stable
     /// across the conversation.
     private func parentMemoryAppendPrompts(for session: PiAgentSessionRecord, initialPrompt: String?) async -> [String] {
-        guard appSettings.agentMemoryEnabled else { return [] }
         // Read the live record: the passed `session` may be a stale snapshot from the
         // launch caller, and the recall gate must reflect what's actually persisted.
         let current = piAgentSessionStore.sessions.first(where: { $0.id == session.id }) ?? session
+        guard sessionMemoryPolicy(current).enabled else { return [] }
         let guidance = agentMemoryGuidancePrompt(projectPath: current.projectPath)
 
         if current.memoryRecallCompleted {
@@ -7218,6 +7272,7 @@ final class AppViewModel: NSObject {
             piAgentSessionStore.updateSession(session.id) { $0.memoryRecallCompleted = true }
             return [guidance]
         }
+        guard allowsMemory(sessionID: session.id) else { return [] }
         agentMemoryStore.markUsed(retrieval.records.map(\.id))
         let recalledIDs = retrieval.records.map(\.id)
         piAgentSessionStore.updateSession(session.id) { record in
@@ -7230,7 +7285,7 @@ final class AppViewModel: NSObject {
     }
 
     private func childMemoryLaunchContext(for parentSession: PiAgentSessionRecord, agent: EffectiveAgentRecord, task: String) async -> PiSubagentMemoryLaunchContext {
-        guard appSettings.agentMemoryEnabled, appSettings.agentMemorySubagentsEnabled else { return .empty }
+        guard allowsMemory(sessionID: parentSession.id, child: true) else { return .empty }
         let query = [agent.name, agent.resolved.description, task].joined(separator: "\n")
         let projectPath = parentSession.projectPathForProjectFeatures
         var prompts = [agentMemoryGuidancePrompt(projectPath: projectPath, isSubagent: true)]
@@ -7242,6 +7297,7 @@ final class AppViewModel: NSObject {
         ) else {
             return PiSubagentMemoryLaunchContext(arguments: prompts.flatMap { ["--append-system-prompt", $0] }, memoryIDs: nil, memoryTitles: nil)
         }
+        guard allowsMemory(sessionID: parentSession.id, child: true) else { return .empty }
         agentMemoryStore.markUsed(retrieval.records.map(\.id))
         appendMemoryEvent(.recalled, records: retrieval.records, summary: "Loaded \(retrieval.records.count) scoped memor\(retrieval.records.count == 1 ? "y" : "ies") for Deck agent \(agent.name).", sessionID: parentSession.id)
         prompts.append(retrieval.prompt)
@@ -7274,13 +7330,13 @@ final class AppViewModel: NSObject {
     }
 
     private func handleParentMemoryWrite(sessionID: UUID, request: AgentMemoryWriteBridgeRequest) async -> String {
-        guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
+        guard allowsMemory(sessionID: sessionID, write: true) else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return await createAutomaticMemory(request, sourceSessionID: sessionID, sourceRunID: nil, sourceAgentName: nil, fallbackProjectPath: session?.projectPath)
     }
 
     private func handleSubagentMemoryWrite(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryWriteBridgeRequest) async -> String {
-        guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
+        guard allowsMemory(sessionID: parentSessionID, child: true, write: true) else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID })
         return await createAutomaticMemory(request, sourceSessionID: parentSessionID, sourceRunID: runID, sourceAgentName: agentName, fallbackProjectPath: session?.projectPath)
     }
@@ -7299,7 +7355,8 @@ final class AppViewModel: NSObject {
                     summary: request.summary,
                     body: request.body,
                     tags: request.tags ?? target.tags,
-                    reactivateIfStale: true
+                    reactivateIfStale: true,
+                    byAgent: true
                 )
                 let updated = agentMemoryStore.records(projectPath: fallbackProjectPath).first(where: { $0.id == target.id }) ?? target
                 appendMemoryEvent(.edited, records: [updated], summary: "Updated \(updated.kind.displayName.lowercased()) memory: \(updated.title).", sessionID: sourceSessionID)
@@ -7324,6 +7381,7 @@ final class AppViewModel: NSObject {
             return "Not stored: an existing memory likely covers this — \"\(duplicate.title)\" (\(duplicate.id)). Call agent_deck_memory_write again with id \"\(duplicate.id)\" to update it, or with confirmNew true if it is genuinely a different fact."
         }
 
+        guard allowsMemory(sessionID: sourceSessionID, child: sourceRunID != nil, write: true) else { return "Session memory writes were disabled while the request was running." }
         let classification = classifyMemoryWrite(request, fallbackProjectPath: fallbackProjectPath, sourceAgentName: sourceAgentName)
         do {
             let record = try agentMemoryStore.createMemory(
@@ -7348,13 +7406,13 @@ final class AppViewModel: NSObject {
     }
 
     private func handleParentMemoryMarkStale(sessionID: UUID, request: AgentMemoryStaleBridgeRequest) async -> String {
-        guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
+        guard allowsMemory(sessionID: sessionID, write: true) else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return await markStaleMemories(request, sourceSessionID: sessionID, fallbackProjectPath: session?.projectPath)
     }
 
     private func handleSubagentMemoryMarkStale(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemoryStaleBridgeRequest) async -> String {
-        guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
+        guard allowsMemory(sessionID: parentSessionID, child: true, write: true) else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID })
         return await markStaleMemories(request, sourceSessionID: parentSessionID, fallbackProjectPath: session?.projectPath)
     }
@@ -7368,27 +7426,29 @@ final class AppViewModel: NSObject {
         if matchedRecords.isEmpty, let query = request.query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
             matchedRecords = await agentMemoryStore.retrieve(projectPath: fallbackProjectPath, query: query, maxItems: 5)?.records ?? []
         }
+        guard allowsMemory(sessionID: sourceSessionID, write: true) else { return "Session memory writes are disabled." }
         let uniqueRecords = Dictionary(grouping: matchedRecords, by: \.id).compactMap { $0.value.first }
         guard !uniqueRecords.isEmpty else {
             let summary = "No active Agent Deck memory matched the stale request."
             appendMemoryEvent(.blocked, records: [], summary: summary, sessionID: sourceSessionID)
             return summary
         }
-        for record in uniqueRecords {
-            agentMemoryStore.setStatus(id: record.id, status: .stale)
-        }
+        guard !uniqueRecords.contains(where: \.isUserLocked) else { return AgentMemoryError.locked.localizedDescription }
+        do {
+            for record in uniqueRecords { try agentMemoryStore.changeStatus(id: record.id, status: .stale, byAgent: true) }
+        } catch { return error.localizedDescription }
         appendMemoryEvent(.stale, records: uniqueRecords, summary: "Marked \(uniqueRecords.count) memor\(uniqueRecords.count == 1 ? "y" : "ies") stale; stale memory is no longer injected automatically.", sessionID: sourceSessionID)
         return "Marked \(uniqueRecords.count) Agent Deck memor\(uniqueRecords.count == 1 ? "y" : "ies") stale."
     }
 
     private func handleParentMemorySearch(sessionID: UUID, request: AgentMemorySearchBridgeRequest) async -> String {
-        guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
+        guard allowsMemory(sessionID: sessionID) else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == sessionID })
         return await searchMemories(request, cardSessionID: sessionID, snapshotSessionID: sessionID, projectPath: session?.projectPath)
     }
 
     private func handleSubagentMemorySearch(parentSessionID: UUID, runID: UUID, agentName: String?, request: AgentMemorySearchBridgeRequest) async -> String {
-        guard appSettings.agentMemoryEnabled else { return "\(AppBrand.displayName) memory is disabled." }
+        guard allowsMemory(sessionID: parentSessionID, child: true) else { return "\(AppBrand.displayName) memory is disabled." }
         let session = piAgentSessionStore.sessions.first(where: { $0.id == parentSessionID })
         // Deck agents run with their own task-scoped launch recall and have no
         // persistent recall snapshot, so they pass snapshotSessionID: nil — no
@@ -7415,6 +7475,7 @@ final class AppViewModel: NSObject {
         ) else {
             return "No \(AppBrand.displayName) project memory matched \"\(query)\"."
         }
+        guard allowsMemory(sessionID: cardSessionID, child: snapshotSessionID == nil) else { return "Session memory was disabled while the search was running." }
         let alreadyInContext: Set<String> = snapshotSessionID
             .flatMap { id in piAgentSessionStore.sessions.first(where: { $0.id == id })?.recalledMemoryIDs }
             .map(Set.init) ?? []
@@ -7554,6 +7615,7 @@ final class AppViewModel: NSObject {
                 session.agentSelection = nil
             }
         }
+        piAgentRunner.requestLaunchResourceRelaunch(sessionID: sessionID, summary: "Deck agent availability changed")
         reconcileRunningSessionLaunchResourceFingerprints()
     }
 
@@ -7584,6 +7646,7 @@ final class AppViewModel: NSObject {
         piAgentSessionStore.updateSession(sessionID, bumpUpdatedAt: false) { session in
             session.agentSelection = session.isNoProject ? nil : selection
         }
+        piAgentRunner.requestLaunchResourceRelaunch(sessionID: sessionID, summary: "Deck agent selection changed")
         reconcileRunningSessionLaunchResourceFingerprints()
     }
 
@@ -7605,6 +7668,8 @@ final class AppViewModel: NSObject {
             }
             session.agentLaunchOverrides = overrides.isEmpty ? nil : overrides
         }
+        piAgentRunner.requestLaunchResourceRelaunch(sessionID: sessionID, summary: "Deck agent model settings changed")
+        reconcileRunningSessionLaunchResourceFingerprints()
     }
 
     private func settingsSummary(for scope: AgentEditingTarget.OverrideScope) -> SettingsSummary? {

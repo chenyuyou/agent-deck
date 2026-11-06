@@ -3,6 +3,93 @@ import XCTest
 
 @MainActor
 final class AgentMemoryStoreTests: XCTestCase {
+    func testUserLockBlocksAgentEditsAndStaleChangesButAllowsUserEdits() throws {
+        let store = AgentMemoryStore(rootURL: try temporaryDirectory())
+        let record = try store.createMemory(kind: .context, status: .active, title: "Original", summary: "Context", body: "Original body", projectPath: "/tmp/project")
+        try store.setUserLocked(id: record.id, locked: true)
+        XCTAssertThrowsError(try store.updateMemory(id: record.id, title: "Agent edit", summary: "", body: "Modified", tags: [], byAgent: true))
+        XCTAssertThrowsError(try store.changeStatus(id: record.id, status: .stale, byAgent: true))
+        XCTAssertEqual(store.records.first?.title, "Original")
+        try store.updateMemory(id: record.id, title: "User edit", summary: "", body: "User body", tags: [])
+        XCTAssertTrue(store.records.first!.isUserLocked)
+        try store.setUserLocked(id: record.id, locked: false)
+        try store.updateMemory(id: record.id, title: "Agent edit", summary: "", body: "Agent body", tags: [], byAgent: true)
+        XCTAssertEqual(store.records.first?.title, "Agent edit")
+    }
+
+    func testKindMigrationHistoryAndRestorePreserveIdentityAndLock() throws {
+        let store = AgentMemoryStore(rootURL: try temporaryDirectory())
+        let record = try store.createMemory(kind: .context, status: .active, title: "Original", summary: "Initial summary", body: "Original body", projectPath: "/tmp/project", tags: ["initial"])
+        try store.updateMemory(id: record.id, title: "Updated", summary: "New summary", body: "New body", tags: ["new"], kind: .decision, byAgent: true)
+        let changed = try XCTUnwrap(store.records.first)
+        XCTAssertEqual(changed.id, record.id)
+        XCTAssertEqual(changed.kind, .decision)
+        XCTAssertNotEqual(changed.filePath, record.filePath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: record.filePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: changed.filePath))
+        let history = try store.history(for: changed)
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?.source, "Agent edit")
+        XCTAssertEqual(history.first?.document.body, "Original body")
+        try store.setUserLocked(id: record.id, locked: true)
+        try store.restoreRevision(history[0].id, for: record.id)
+        let restored = try XCTUnwrap(store.records.first)
+        XCTAssertEqual(restored.kind, .context)
+        XCTAssertEqual(restored.title, "Original")
+        XCTAssertEqual(restored.tags, ["initial"])
+        XCTAssertTrue(restored.isUserLocked)
+        XCTAssertEqual(store.document(for: restored).body, "Original body")
+        XCTAssertEqual(try store.history(for: restored).count, 3)
+    }
+
+    func testFailedMemoryWriteDoesNotPublishMetadataAndSecretNeverEntersHistory() throws {
+        let root = try temporaryDirectory()
+        let store = AgentMemoryStore(rootURL: root)
+        let record = try store.createMemory(kind: .context, status: .active, title: "Original", summary: "", body: "Original body", projectPath: "/tmp/project")
+        XCTAssertThrowsError(try store.updateMemory(id: record.id, title: "Bad", summary: "", body: "password=verysecretvalue", tags: []))
+        XCTAssertTrue(try store.history(for: record).isEmpty)
+        let manifest = root.appendingPathComponent("projects/\(AgentMemoryStore.projectID(for: "/tmp/project"))/manifest.json")
+        try FileManager.default.removeItem(at: manifest)
+        try FileManager.default.createDirectory(at: manifest, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try store.updateMemory(id: record.id, title: "New", summary: "", body: "New body", tags: []))
+        XCTAssertEqual(store.records.first?.title, "Original")
+        XCTAssertEqual(store.document(for: record).body, "Original body")
+    }
+
+    func testFailedStatusAndDeletionPreserveMemory() throws {
+        let root = try temporaryDirectory()
+        let store = AgentMemoryStore(rootURL: root)
+        let record = try store.createMemory(kind: .context, status: .active, title: "Original", summary: "", body: "Keep this body", projectPath: "/tmp/project")
+        let manifest = root.appendingPathComponent("projects/\(AgentMemoryStore.projectID(for: "/tmp/project"))/manifest.json")
+        let data = try Data(contentsOf: manifest)
+        try FileManager.default.removeItem(at: manifest)
+        try FileManager.default.createDirectory(at: manifest, withIntermediateDirectories: false)
+        XCTAssertFalse(store.setStatus(id: record.id, status: .archived))
+        XCTAssertEqual(store.records.first?.status, .active)
+        XCTAssertFalse(store.deleteMemory(id: record.id))
+        XCTAssertEqual(store.records.count, 1)
+        XCTAssertEqual(store.document(for: record).body, "Keep this body")
+        XCTAssertNotNil(store.lastError)
+        try FileManager.default.removeItem(at: manifest)
+        try data.write(to: manifest)
+        XCTAssertTrue(store.deleteMemory(id: record.id))
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: record.filePath))
+        XCTAssertNil(store.lastError)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [Any])
+        XCTAssertTrue(json.isEmpty)
+    }
+
+    func testLegacyMemoryDecodesAsUnlocked() throws {
+        let store = AgentMemoryStore(rootURL: try temporaryDirectory())
+        let record = try store.createMemory(kind: .context, status: .active, title: "Legacy", summary: "", body: "Body", projectPath: "/tmp/project")
+        let data = try JSONEncoder().encode(record)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "userLocked")
+        let decoded = try JSONDecoder().decode(AgentMemoryRecord.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertFalse(decoded.isUserLocked)
+    }
+
     func testCreateMemoryPersistsMarkdownAndManifest() throws {
         let root = try temporaryDirectory()
         let store = AgentMemoryStore(rootURL: root)

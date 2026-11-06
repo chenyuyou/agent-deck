@@ -318,9 +318,35 @@ final class PiAgentRunnerService {
         requestLaunchResourceRelaunch(sessionID: sessionID)
     }
 
+    func hasPendingConfigurationChange(sessionID: UUID) -> Bool {
+        pendingConfigurationRestartSessionIDs.contains(sessionID)
+    }
+
+    /// Explicit user-added context is queued after the current turn, never steering it.
+    @discardableResult
+    func enqueueMemoryContext(_ text: String, sessionID: UUID) -> Bool {
+        guard let session = store.sessions.first(where: { $0.id == sessionID }), session.status != .starting else { return false }
+        if let client = clientsBySessionID[sessionID], client.isRunning, session.status.isActive {
+            cancelPendingIdle(for: sessionID)
+            cancelIdleParking(for: sessionID)
+            store.append(.init(sessionID: sessionID, role: .user, title: "Follow-up", text: text))
+            client.prompt(text, streamingBehavior: "followUp")
+        } else if clientsBySessionID[sessionID]?.isRunning == true {
+            send(text, mode: .prompt, to: sessionID)
+        } else {
+            resume(session: session, initialPrompt: text)
+        }
+        return true
+    }
+
     func requestLaunchResourceRelaunch(sessionID: UUID, summary: String? = nil) {
-        guard clientsBySessionID[sessionID] != nil,
-              let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
+        guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
+        if session.status == .starting {
+            pendingConfigurationRestartSessionIDs.insert(sessionID)
+            if let summary { recordPendingConfigurationChangeSummary(sessionID: sessionID, summary: summary) }
+            return
+        }
+        guard clientsBySessionID[sessionID] != nil else { return }
         if let summary {
             recordPendingConfigurationChangeSummary(sessionID: sessionID, summary: summary)
         }
@@ -778,7 +804,7 @@ final class PiAgentRunnerService {
                 extraArguments.append(contentsOf: ["--extension", askURL.path])
             }
             if !session.isNoProject,
-               AppSettingsStore.shared.settings.agentMemoryEnabled,
+               session.effectiveMemoryPolicy(defaultEnabled: AppSettingsStore.shared.settings.agentMemoryEnabled, defaultSubagents: AppSettingsStore.shared.settings.agentMemorySubagentsEnabled).enabled,
                let memoryURL = try? PiNativeSubagentBridgeExtensions.memoryExtensionURL() {
                 extraArguments.append(contentsOf: ["--extension", memoryURL.path])
             }
@@ -824,7 +850,7 @@ final class PiAgentRunnerService {
                 // appended to the system prompt, no child-boundary boilerplate.
                 let exaConfigured = PiNativeSubagentBridgeExtensions.isExaConfigured(environment: environment)
                 let webFetchInstalled = WebFetchDependencyService().status().isInstalled
-                let memoryEnabled = AppSettingsStore.shared.settings.agentMemoryEnabled
+                let memoryEnabled = session.effectiveMemoryPolicy(defaultEnabled: AppSettingsStore.shared.settings.agentMemoryEnabled, defaultSubagents: AppSettingsStore.shared.settings.agentMemorySubagentsEnabled).enabled
                 extraArguments.append(contentsOf: PiAgentLaunchArgumentBuilder.systemPromptArguments(
                     for: boundAgent,
                     prompt: boundAgent.resolved.systemPrompt
@@ -974,7 +1000,7 @@ final class PiAgentRunnerService {
                 // Stamped per launch: memory injection (recall prompts, memory
                 // tools) is decided by the global setting at process start, so
                 // the resources popover can report what this run actually got.
-                record.memoryEnabled = !session.isNoProject && AppSettingsStore.shared.settings.agentMemoryEnabled
+                record.memoryEnabled = !session.isNoProject && session.effectiveMemoryPolicy(defaultEnabled: AppSettingsStore.shared.settings.agentMemoryEnabled, defaultSubagents: AppSettingsStore.shared.settings.agentMemorySubagentsEnabled).enabled
             }
             client.getState()
             client.getCommands()
