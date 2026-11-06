@@ -16,7 +16,7 @@
 #   VOLUME_NAME="Agent Deck"
 #   DEVELOPMENT_TEAM=<parsed from signing identity when possible>
 #   BUILD_NUMBER=<current project build number>
-#   SU_FEED_URL=https://agentdeck.site/appcast.xml
+#   SU_FEED_URL=https://github.com/chenyuyou/agent-deck/releases/latest/download/appcast.xml
 #   ALLOW_NON_PRODUCTION_FEED=0
 #   SKIP_NOTARIZATION=0
 #
@@ -78,7 +78,7 @@ if [[ -z "${VERSION:-}" ]]; then
 fi
 
 DMG_PATH="$BUILD_DIR/Agent-Deck-${VERSION}.dmg"
-DEFAULT_SU_FEED_URL="https://agentdeck.site/appcast.xml"
+DEFAULT_SU_FEED_URL="https://github.com/chenyuyou/agent-deck/releases/latest/download/appcast.xml"
 if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
   DEVELOPMENT_TEAM="$(printf '%s' "$DEVELOPER_ID_APPLICATION" | sed -n 's/.*(\([A-Z0-9][A-Z0-9]*\)).*/\1/p')"
 fi

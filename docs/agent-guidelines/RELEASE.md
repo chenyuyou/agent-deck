@@ -32,7 +32,7 @@ bash scripts/package-dmg.sh
 - Version tags may be two-part feature releases (`v1.8`, `v2.0`) or three-part patch releases (`v1.7.1`).
 - Patch and minor releases are published to the same Sparkle appcast with a one-day phased rollout interval; manual "Check for Updates..." sees them immediately, while scheduled checks roll out across Sparkle's update groups. Major releases, such as `v2.0`, are not phased.
 - Requires signing, notarization, and Sparkle secrets from GitHub Actions.
-- Attaches the Sparkle `<item>` as `appcast-item.xml` to the GitHub release; `agentdeck.site` stitches these fragments into `/appcast.xml` dynamically.
+- Attaches the Sparkle `<item>` as `appcast-item.xml` to the GitHub release; the complete `appcast.xml` is also attached and served through `https://github.com/chenyuyou/agent-deck/releases/latest/download/appcast.xml`.
 - Patch-release appcast descriptions include the cumulative changelog for the whole minor series (e.g. 2.7 + 2.7.1 + 2.7.2 for a 2.7.2 update), because Sparkle only shows the current item's notes and would otherwise hide skipped patches.
 
 If release behavior changes, update both the script and the workflow.
@@ -55,3 +55,18 @@ Before publishing, run the focused static regression checks in addition to the n
 bash scripts/test-package-signing.sh
 "$(dirname "$(command -v pi)")/node" scripts/test-computer-use-broker-variant.mjs
 ```
+
+## Fork version and update channel
+
+This fork publishes from `chenyuyou/agent-deck`, with local marketing version
+1.0.1 and build 17. Its update feed is the latest GitHub release's `appcast.xml`
+asset; preview releases do not advance the stable Sparkle channel. CI uses build
+numbers `1000000 + GITHUB_RUN_NUMBER` so its first release supersedes local build 17.
+
+Configure repository variable `SPARKLE_PUBLIC_KEY` and the matching secret
+`SPARKLE_PRIVATE_KEY`, along with the existing Developer ID and notarization
+secrets, before publishing signed updates. Local signed packages receive the
+same public key through `SU_PUBLIC_ED_KEY`. The original author's key is not used.
+Without a public key, scheduled Sparkle updates stay disabled and manual
+Check for Updates opens this fork's GitHub Releases page. A feed URL alone does
+not enable signed distribution; no stable feed exists until a release publishes it.

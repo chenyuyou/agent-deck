@@ -8,17 +8,13 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var updateAvailable: Bool = false
     @Published private(set) var availableVersion: String? = nil
 
-    /// Sparkle is disabled in debug builds. The Sparkle Info.plist keys
-    /// (`SUFeedURL` / `SUPublicEDKey`) are injected only by the CI release build,
-    /// so a local debug build would start the updater with no feed and no EdDSA
-    /// key — which logs Sparkle's "Serving updates without an EdDSA key …
-    /// deprecated" warning plus the `sessionInProgress` noise, and can't update
-    /// anything anyway. Local builds don't self-update, so we never start it.
+    /// Local builds without this fork's public signing key use GitHub Releases.
+    /// Signed builds use Sparkle; debug builds never start scheduled checks.
     private static let isEnabled: Bool = {
         #if DEBUG
         return false
         #else
-        return true
+        return !(Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? "").isEmpty
         #endif
     }()
 
@@ -48,7 +44,12 @@ final class UpdaterService: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// `checkForUpdates(_:)` silently drops the call. Poll briefly for the
     /// in-flight session to settle before giving up.
     func checkForUpdates() {
-        guard Self.isEnabled else { return }
+        guard Self.isEnabled else {
+            if let url = URL(string: "https://github.com/\(ReleaseService.repository)/releases") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
         if controller.updater.canCheckForUpdates {
             controller.checkForUpdates(nil)
             return

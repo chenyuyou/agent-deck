@@ -110,7 +110,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           xcrun agvtool new-marketing-version "$VERSION"
-          xcrun agvtool new-version -all "${GITHUB_RUN_NUMBER:-1}"
+          xcrun agvtool new-version -all "$((1000000 + ${GITHUB_RUN_NUMBER:-1}))"
 
       - name: Resolve Swift packages
         run: |
@@ -169,26 +169,24 @@ jobs:
         # word on the Info.plist before signing.
         env:
           VERSION: ${{ steps.ver.outputs.version }}
+          SU_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           PLIST="build/release/export/Agent Deck.app/Contents/Info.plist"
           # Version (marketing = tag, build = run number).
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VERSION" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" "$PLIST" 2>/dev/null \
-            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string ${GITHUB_RUN_NUMBER}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $((1000000 + GITHUB_RUN_NUMBER))" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $((1000000 + GITHUB_RUN_NUMBER))" "$PLIST"
           /usr/libexec/PlistBuddy -c \
-            "Add :SUFeedURL string https://agentdeck.site/appcast.xml" \
+            "Add :SUFeedURL string https://github.com/chenyuyou/agent-deck/releases/latest/download/appcast.xml" \
             "$PLIST" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c \
-            "Set :SUFeedURL https://agentdeck.site/appcast.xml" \
+            "Set :SUFeedURL https://github.com/chenyuyou/agent-deck/releases/latest/download/appcast.xml" \
             "$PLIST"
-          /usr/libexec/PlistBuddy -c \
-            "Add :SUPublicEDKey string CWncStYBPVugWOxjexH1nhbtMiUedfr62Zq/Colmf6U=" \
-            "$PLIST" 2>/dev/null \
-            || /usr/libexec/PlistBuddy -c \
-            "Set :SUPublicEDKey CWncStYBPVugWOxjexH1nhbtMiUedfr62Zq/Colmf6U=" \
-            "$PLIST"
+          test -n "$SU_PUBLIC_ED_KEY" || { echo "Configure repository variable SPARKLE_PUBLIC_KEY for this fork" >&2; exit 1; }
+          /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SU_PUBLIC_ED_KEY" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SU_PUBLIC_ED_KEY" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool YES" "$PLIST" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks YES" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :SUScheduledCheckInterval integer 86400" "$PLIST" 2>/dev/null \
@@ -332,11 +330,7 @@ jobs:
             "$DMG" "${DMG}.sha256"
 
       - name: Publish appcast item asset
-        # Instead of committing docs/appcast.xml back to main (which polluted
-        # history with one bot commit per release), we attach the fully-formed
-        # Sparkle <item> as an `appcast-item.xml` release asset. agentdeck.site
-        # serves /appcast.xml dynamically by stitching these fragments together
-        # from the live releases list — no commits here, no site redeploy.
+        # Publish a complete RSS feed at this repository's latest-release asset URL.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
@@ -358,7 +352,7 @@ jobs:
           tag = os.environ["TAG"]
           version = os.environ["VERSION"]
           ed = os.environ["ED_FRAGMENT"]
-          run = os.environ["GITHUB_RUN_NUMBER"]
+          run = str(1000000 + int(os.environ["GITHUB_RUN_NUMBER"]))
           repo = os.environ["GITHUB_REPOSITORY"]
           min_os = os.environ["MIN_OS"]
           pubdate = os.environ["PUBDATE"]
@@ -444,4 +438,9 @@ jobs:
           PY
 
           # --clobber so re-running a release for the same tag overwrites cleanly.
-          gh release upload "$TAG" appcast-item.xml --clobber
+          python3 - <<'PY'
+          from pathlib import Path
+          item = Path("appcast-item.xml").read_text()
+          Path("appcast.xml").write_text('<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><title>Agent Deck — chenyuyou</title>\n' + item + '</channel></rss>\n')
+          PY
+          gh release upload "$TAG" appcast-item.xml appcast.xml --clobber

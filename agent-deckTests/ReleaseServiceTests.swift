@@ -2,6 +2,13 @@ import XCTest
 @testable import agent_deck
 
 final class ReleaseServiceTests: XCTestCase {
+    @MainActor
+    func testReleaseLinksUseForkRepository() {
+        XCTAssertEqual(ReleaseService.repository, "chenyuyou/agent-deck")
+        XCTAssertEqual(ReleaseService.releaseURL(tag: "v1.0.1")?.absoluteString,
+                       "https://github.com/chenyuyou/agent-deck/releases/tag/v1.0.1")
+    }
+
     func testNextVersionsFromTwoPartTag() {
         let next = ReleaseService.nextVersions(from: "v1.7")
 

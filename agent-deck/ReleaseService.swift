@@ -8,7 +8,7 @@ import Foundation
 struct ReleaseService {
     /// The one repo this whole flow is scoped to. The toolbar button only shows
     /// when the selected session's repo matches this.
-    nonisolated static let repository = "a-streetcoder/agent-deck"
+    nonisolated static let repository = "chenyuyou/agent-deck"
     nonisolated static let remote = "origin"
     nonisolated static let mainBranch = "main"
 

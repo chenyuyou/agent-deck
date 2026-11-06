@@ -38,9 +38,10 @@ fi
 
 # Keep this list in sync with the in-app Sparkle setup. Update the public
 # key if you ever rotate the Sparkle EdDSA keypair.
-SU_FEED_URL="${SU_FEED_URL:-https://agentdeck.site/appcast.xml}"
-SU_PUBLIC_ED_KEY="CWncStYBPVugWOxjexH1nhbtMiUedfr62Zq/Colmf6U="
-SU_AUTOMATIC_CHECKS="YES"
+SU_FEED_URL="${SU_FEED_URL:-https://github.com/chenyuyou/agent-deck/releases/latest/download/appcast.xml}"
+SU_PUBLIC_ED_KEY="${SU_PUBLIC_ED_KEY:-}"
+SU_AUTOMATIC_CHECKS="NO"
+if [[ -n "$SU_PUBLIC_ED_KEY" ]]; then SU_AUTOMATIC_CHECKS="YES"; fi
 SU_CHECK_INTERVAL=86400   # once a day
 
 set_or_add() {
