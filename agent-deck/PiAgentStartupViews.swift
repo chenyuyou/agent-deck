@@ -515,6 +515,9 @@ struct PiAgentSessionModelsSheet: View {
                     } else {
                         ScrollView {
                             PiAgentSessionSubagentPickerCard(viewModel: viewModel, session: session, sessionConfigurationMode: true)
+                            Text("Click a model or Thinking chip to edit it. Add agents selects existing agents; create or import new agents from the Agents library first.")
+                                .font(.caption).foregroundStyle(AppTheme.mutedText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 } else {
@@ -610,6 +613,13 @@ struct PiSessionMemorySettings: View {
 struct PiAgentSessionSubagentPickerCard: View {
     var viewModel: AppViewModel
     let session: PiAgentSessionRecord
+
+    static func addableAgents(in universe: [EffectiveAgentRecord], defaultNames: Set<String>, selection: Set<String>) -> [EffectiveAgentRecord] {
+        var seen = Set<String>()
+        return universe.filter {
+            (!defaultNames.contains($0.name) || !selection.contains($0.name)) && seen.insert($0.name).inserted
+        }
+    }
 
     var modelEditingOnly = false
     var sessionConfigurationMode = false
@@ -717,9 +727,7 @@ struct PiAgentSessionSubagentPickerCard: View {
         let addedRows = universe
             .filter { selection.contains($0.name) && !rowNames.contains($0.name) && seenAddedRows.insert($0.name).inserted }
             .sorted(by: byName)
-        var seenAddable = Set<String>()
-        let addable = universe
-            .filter { !rowNames.contains($0.name) && seenAddable.insert($0.name).inserted }
+        let addable = Self.addableAgents(in: universe, defaultNames: rowNames, selection: selection)
             .sorted(by: byName)
 
 #if DEBUG
@@ -1077,7 +1085,7 @@ struct PiAgentSessionSubagentPickerCard: View {
                     }
                 }
                 PiAgentPickerAddRow(
-                    isEnabled: !data.addable.isEmpty,
+                    isEnabled: true,
                     showsReset: data.hasExplicitSelection,
                     onAdd: { isAddSheetPresented = true },
                     onReset: { viewModel.setAgentSelection(nil, for: session.id) }
@@ -2056,7 +2064,7 @@ struct PiAgentAddAgentsSheet: View {
     private var list: some View {
         let filteredAgents = filtered
         if addable.isEmpty {
-            emptyState("Every available agent is already in the session.")
+            emptyState("All available agents are already listed in this session. Select or deselect them in Session settings. To add a different agent, first create or import it in Agents, then reopen this picker.")
         } else if filteredAgents.isEmpty {
             emptyState("No agents match “\(query.trimmingCharacters(in: .whitespacesAndNewlines))”.")
         } else {

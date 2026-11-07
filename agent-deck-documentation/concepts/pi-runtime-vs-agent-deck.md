@@ -80,3 +80,9 @@ Parent Pi sessions receive generated bridge tools such as `managed_subagent`, wh
 ## MCP note
 
 Pi core intentionally does not provide built-in MCP. MCP-like or direct tool behavior is extension/package/app-specific. In Agent Deck docs, fields such as `mcpDirectTools` are Agent Deck/native-subagent integration concepts, not Pi core MCP guarantees.
+
+In Session settings → Agents, model and Thinking chips open editable choices.
+Add agents selects existing catalog entries, including default agents that were
+deselected. When all catalog agents are already listed, the picker explains how
+to create or import another agent from the Agents library instead of disabling
+the entry without explanation.

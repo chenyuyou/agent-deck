@@ -5,6 +5,18 @@ import XCTest
 
 final class PiAgentLaunchResolverTests: XCTestCase {
     @MainActor
+    func testAgentPickerOffersDeselectedDefaultsAndPreservesExtraChoices() {
+        let explorer = effectiveAgent(name: "explorer", id: "explorer")
+        let planner = effectiveAgent(name: "planner", id: "planner")
+        let extra = effectiveAgent(name: "custom", id: "custom")
+        let universe = [explorer, planner, extra, extra]
+        let defaults: Set<String> = ["explorer", "planner"]
+        XCTAssertEqual(PiAgentSessionSubagentPickerCard.addableAgents(in: universe, defaultNames: defaults, selection: ["explorer"]).map(\.name), ["planner", "custom"])
+        XCTAssertEqual(PiAgentSessionSubagentPickerCard.addableAgents(in: universe, defaultNames: defaults, selection: ["explorer", "planner", "custom"]).map(\.name), ["custom"])
+        XCTAssertTrue(PiAgentSessionSubagentPickerCard.addableAgents(in: [explorer, planner], defaultNames: defaults, selection: defaults).isEmpty)
+    }
+
+    @MainActor
     func testSessionAgentsAndMemorySettingsRenderOffscreen() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let memory = AgentMemoryStore(rootURL: root)
