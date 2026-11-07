@@ -4426,6 +4426,7 @@ struct CodingAgentExpandedPanel: View {
         // this trigger the cached sections stayed grouped under "Other" until a
         // later rebuild (the original first-launch "all Other" symptom).
         .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
+        .onChange(of: viewModel.hiddenSessionProjectPaths) { _, _ in rebuildVisibleSessionsDeferredIfNeeded() }
         .onChange(of: store.selectedSession?.id) { _, _ in
             rebuildVisibleSessionsDeferredIfNeeded()
             syncMultiSelectionToSelectedSession()
@@ -4522,7 +4523,7 @@ struct CodingAgentExpandedPanel: View {
     }
 
     private var scopedSessions: [PiAgentSessionRecord] {
-        store.sessions
+        PiAgentSessionGrouping.excludingHiddenProjects(from: store.sessions, hiddenPaths: viewModel.hiddenSessionProjectPaths)
     }
 
     private var isAllProjects: Bool { true }
@@ -5064,6 +5065,7 @@ struct PiAgentScreen: View {
         // this trigger the cached sections stayed grouped under "Other" until a
         // later rebuild.
         .onChange(of: viewModel.discoveredProjectsRevision) { _, _ in rebuildVisibleSessions() }
+        .onChange(of: viewModel.hiddenSessionProjectPaths) { _, _ in rebuildVisibleSessions() }
         .onDisappear {
             processingMessageUpdateTask?.cancel()
             processingMessageUpdateTask = nil
@@ -5226,7 +5228,7 @@ struct PiAgentScreen: View {
     }
 
     private var scopedSessions: [PiAgentSessionRecord] {
-        store.sessions
+        PiAgentSessionGrouping.excludingHiddenProjects(from: store.sessions, hiddenPaths: viewModel.hiddenSessionProjectPaths)
     }
 
     private var isAllProjects: Bool { true }

@@ -71,3 +71,9 @@ Use this file to quickly find the source of a behavior.
 - `PiAgentRunnerService.swift`: deferred configuration restart and non-steering Memory follow-ups.
 - `AgentMemoryModels.swift`, `AgentMemoryStore.swift`: optional user lock, pre-change revisions, restore, Type migration, and document/manifest commit rollback.
 - `AgentMemoryViews.swift`: shared manual editor, lock controls, history preview, and error reporting.
+
+## Removed-project session visibility
+
+- `PiAgentSessionGrouping.excludingHiddenProjects`: shared path-normalized filter for explicit removals; preserves unrelated missing-project and independent sessions.
+- `AppViewModel.hiddenSessionProjectPaths`: persisted hidden project preferences used by session lists.
+- `CodingAgentSidebarPanel.swift`, `PiAgentViews.swift`: compact and expanded caches rebuild when hidden paths change, and filter before search/grouping.

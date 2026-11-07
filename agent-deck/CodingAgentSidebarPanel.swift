@@ -171,6 +171,7 @@ struct CodingAgentCollapsedPanel: View {
             recentScrollRequest = store.selectedSessionID
         }
         .onChange(of: store.sessionListRevision) { _, _ in rebuildRecents() }
+        .onChange(of: viewModel.hiddenSessionProjectPaths) { _, _ in rebuildRecents() }
         .onChange(of: sessionSearchText) { _, _ in rebuildRecents() }
         .onChange(of: viewModel.showPiAgentAttentionOnly) { _, _ in rebuildRecents() }
         .onChange(of: store.uiRequestsBySessionID) { _, _ in rebuildRecents() }
@@ -240,7 +241,7 @@ struct CodingAgentCollapsedPanel: View {
     }
 
     private func rebuildRecents() {
-        var scoped = store.sessions
+        var scoped = PiAgentSessionGrouping.excludingHiddenProjects(from: store.sessions, hiddenPaths: viewModel.hiddenSessionProjectPaths)
         if viewModel.showPiAgentAttentionOnly {
             scoped = scoped.filter(\.needsAttention)
         }

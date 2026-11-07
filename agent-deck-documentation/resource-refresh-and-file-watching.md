@@ -112,3 +112,16 @@ Stopping cancels:
   - debounce scheduling
   - fallback timer
   - refresh trigger
+
+## Temporarily removing projects
+
+Removing a project from the library hides the project and its sessions from the
+expanded sidebar, compact recent-session strip, and session list. The persisted
+hidden preference applies after refresh and restart, including when historical
+sessions refer to a project that discovery cannot currently find. A missing
+project without an explicit removal remains visible so temporary discovery or
+filesystem outages do not hide its history.
+
+Removal does not delete project files, session history, or worktrees and does not
+stop an already running session. Re-add the project to expose its retained
+sessions again. Moving project files to Trash is a separate, explicit action.

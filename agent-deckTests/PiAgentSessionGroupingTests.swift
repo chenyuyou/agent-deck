@@ -4,6 +4,28 @@ import XCTest
 @MainActor
 final class PiAgentSessionGroupingTests: XCTestCase {
 
+    func testRemovedProjectsDoNotReturnThroughHistoricalSessions() throws {
+        let removed = try makeSession(title: "Removed", updatedAt: now, status: .running, projectPath: "/projects/removed/./")
+        let missing = try makeSession(title: "Missing", updatedAt: now, projectPath: "/projects/missing")
+        let retained = try makeSession(title: "Retained", updatedAt: now, projectPath: "/projects/removed-copy")
+        var independent = try makeSession(title: "General", updatedAt: now, projectPath: "")
+        independent.kind = .project
+        independent.noProjectMode = .general
+        let sessions = [removed, missing, retained, independent]
+        let visible = PiAgentSessionGrouping.excludingHiddenProjects(from: sessions, hiddenPaths: ["/projects/removed"])
+        XCTAssertEqual(visible.map(\.id), [missing.id, retained.id, independent.id])
+        let sections = PiAgentSessionGrouping.sections(
+            from: visible, projectByPath: [:], expandedProjectIDs: [], collapsedProjectIDs: [],
+            capPreviews: false, isWorking: { _ in false }, selectedSessionID: removed.id,
+            preserveMissingProjects: true
+        )
+        XCTAssertFalse(sections.flatMap(\.items).contains { $0.id == removed.id })
+        XCTAssertTrue(sections.flatMap(\.items).contains { $0.id == missing.id })
+        // Re-adding a project exposes its retained sessions without rewriting them.
+        XCTAssertEqual(PiAgentSessionGrouping.excludingHiddenProjects(from: sessions, hiddenPaths: []).map(\.id), sessions.map(\.id))
+        XCTAssertEqual(sessions.count, 4)
+    }
+
     func testWorkspaceShowsEmptyProjectsAndIndependentGroup() throws {
         let project = try makeProject(path: "/p/empty", repo: "empty", owner: "owner")
         let sections = PiAgentSessionGrouping.sections(

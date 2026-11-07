@@ -12,6 +12,16 @@ import Foundation
 /// This module is intentionally Foundation-only (no SwiftUI/AppKit) so the
 /// preview rule is unit-testable in isolation.
 enum PiAgentSessionGrouping {
+    /// Explicitly removed projects stay hidden even when historical sessions are retained.
+    static func excludingHiddenProjects(from sessions: [PiAgentSessionRecord], hiddenPaths: Set<String>) -> [PiAgentSessionRecord] {
+        guard !hiddenPaths.isEmpty else { return sessions }
+        let paths = Set(hiddenPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
+        return sessions.filter { session in
+            session.isNoProject || session.isAgentDeckBuilderSession ||
+                !paths.contains(URL(fileURLWithPath: session.projectPath).standardizedFileURL.path)
+        }
+    }
+
     /// Identity of the explicit general-chat group. These sessions are not
     /// project orphans and must not be treated as a discovered-project bucket.
     static let noProjectSectionID = "agent-deck.session-group.no-project"

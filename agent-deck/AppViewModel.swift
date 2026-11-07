@@ -183,6 +183,10 @@ final class AppViewModel: NSObject {
     /// Cheap `.task(id:)` change signal for cached layouts that depend on
     /// preferences — avoids hashing the full dict per render.
     private(set) var projectPreferencesRevision: Int = 0
+    var hiddenSessionProjectPaths: Set<String> {
+        Set(projectPreferencesByPath.values.filter(\.isHidden).map(\.path))
+    }
+
     var selectedProjectPath: String? {
         didSet { clearAgentUniverseCache() }
     }
